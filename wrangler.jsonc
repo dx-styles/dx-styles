@@ -4,12 +4,12 @@
   "workers_dev": false,
   "routes": [
     {
-      "pattern": "dx-styles.dev",
-      "custom_domain": true
+      "pattern": "dx-styles.dev/*",
+      "zone_name": "dx-styles.dev"
     },
     {
-      "pattern": "www.dx-styles.dev",
-      "custom_domain": true
+      "pattern": "www.dx-styles.dev/*",
+      "zone_name": "dx-styles.dev"
     }
   ],
   "assets": {
