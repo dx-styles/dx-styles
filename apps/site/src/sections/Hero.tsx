@@ -51,9 +51,9 @@ export const Hero = (): JSX.Element => {
               CSS-in-TS that <span className={heroAccent}>compiles away</span>
             </h1>
             <p className={heroLead}>
-              The styling foundation for vNext. Authoring stays in TypeScript. CSS is statically
-              extracted at build time — no runtime renderer, no provider, no FOUC. Deterministic
-              class names, theme contracts, and RTL on rails.
+              The styling foundation for design systems. Authoring stays in TypeScript. CSS is
+              statically extracted at build time — no runtime renderer, no provider, no FOUC.
+              Deterministic class names, theme contracts, and RTL on rails.
             </p>
             <div className={ctaRow}>
               <a

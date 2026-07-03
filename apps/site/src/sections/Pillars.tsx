@@ -35,8 +35,8 @@ export const Pillars = (): JSX.Element => {
         <h2 className={sectionTitle}>Three guarantees you can build a design system on.</h2>
         <p className={sectionLead}>
           A small authoring surface, an aggressive build-time pipeline, and a framework-agnostic
-          runtime. Designed to scale with vNext without shipping a single byte of styling code to
-          the browser.
+          runtime. Designed to scale across applications without shipping a single byte of styling
+          code to the browser.
         </p>
         <div className={grid}>
           {pillars.map((pillar) => (
