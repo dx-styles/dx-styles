@@ -1,0 +1,8 @@
+{
+  "name": "dx-styles",
+  "compatibility_date": "2026-07-03",
+  "assets": {
+    "directory": "./apps/site/dist",
+    "not_found_handling": "single-page-application"
+  }
+}
