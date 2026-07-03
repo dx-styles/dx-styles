@@ -89,7 +89,7 @@
     "vite": "8.0.16"
   },
   "scripts": {
-    "build": "bun run build:wyw && bun run build:js && bun run build:types && bun run site:build",
+    "build": "bun run build:wyw && bun run build:js && bun run build:types && bun run site:build:app",
     "build:js": "bunx vite build --config vite-lib-build.ts",
     "build:types": "bunx tsc -b tsconfig.lib.json",
     "build:wyw": "bunx tsc -p tsconfig.wyw.json",
@@ -98,7 +98,8 @@
     "explain": "bun tooling/explain.ts",
     "lint": "bunx eslint . --config eslint.config.js",
     "release": "bunx changeset publish",
-    "site:build": "bun run --cwd apps/site build",
+    "site:build": "bun run build:wyw && bun run site:build:app",
+    "site:build:app": "bun run --cwd apps/site build",
     "site:dev": "bun run --cwd apps/site dev",
     "site:test": "bun run --cwd apps/site test",
     "test": "bun run build:wyw && bun run build:js && bun run src/__tests__/run.ts && bun run site:test",
