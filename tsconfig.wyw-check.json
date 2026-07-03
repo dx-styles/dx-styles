@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.wyw.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "tsBuildInfoFile": ".tmp/tsconfig.wyw-check.tsbuildinfo"
+  }
+}

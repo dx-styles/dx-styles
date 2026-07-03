@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "composite": false,
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": false,
+    "rootDir": ".",
+    "tsBuildInfoFile": ".tmp/tsconfig.wyw.tsbuildinfo",
+    "verbatimModuleSyntax": false
+  },
+  "include": [
+    "processors/*.ts",
+    "preeval-runtime.ts",
+    "src/style-handle-contract.ts",
+    "style-primitives.ts"
+  ],
+  "exclude": ["**/*.d.ts"]
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": ".tmp/tsconfig.tools.tsbuildinfo"
+  },
+  "include": ["vite-lib-build.ts", "vite-lib-watch.ts", "eslint.config.js"]
+}

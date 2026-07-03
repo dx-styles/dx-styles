@@ -1,0 +1,21 @@
+{
+  "name": "dx-styles-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build --config vite.config.ts",
+    "dev": "vite --config vite.config.ts",
+    "test": "bun test --preload ../../test/setup.ts --preload ../../test/setupDxStyles.ts src --bail 1"
+  },
+  "dependencies": {
+    "dx-styles": "file:../..",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@babel/preset-typescript": "7.29.7",
+    "@vitejs/plugin-react": "6.0.2",
+    "@wyw-in-js/vite": "2.1.0",
+    "vite": "8.0.16"
+  }
+}

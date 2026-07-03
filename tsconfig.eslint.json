@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["bun", "node", "react", "vite/client"]
+  },
+  "include": [
+    "*.ts",
+    "apps/site/**/*.d.ts",
+    "apps/site/**/*.ts",
+    "apps/site/**/*.tsx",
+    "preeval-runtime.ts",
+    "processors/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "style-primitives.ts",
+    "test/**/*.ts",
+    "tooling/**/*.ts"
+  ],
+  "exclude": ["apps/site/dist", "dist", "node_modules"]
+}

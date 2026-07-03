@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "composite": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": ".tmp/tsconfig.test.tsbuildinfo",
+    "types": ["bun"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.d.ts",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/__tests__/**/*",
+    "processors/*.ts",
+    "preeval-runtime.ts",
+    "style-primitives.ts",
+    "test/**/*.ts",
+    "tooling/**/*.ts"
+  ]
+}

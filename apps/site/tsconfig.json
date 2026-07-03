@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "paths": {
+      "dx-styles": ["../../src/index.ts"],
+      "dx-styles/preeval-runtime": ["../../preeval-runtime.ts"],
+      "dx-styles/runtime": ["../../src/runtime/index.ts"]
+    },
+    "rootDir": "src",
+    "types": ["vite/client", "node", "react"]
+  },
+  "references": [{ "path": "../../tsconfig.lib.json" }],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}
