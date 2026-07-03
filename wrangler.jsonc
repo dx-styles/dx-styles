@@ -10,6 +10,14 @@
     {
       "pattern": "www.dx-styles.dev/*",
       "zone_name": "dx-styles.dev"
+    },
+    {
+      "pattern": "css-in-js.dev/*",
+      "zone_name": "css-in-js.dev"
+    },
+    {
+      "pattern": "www.css-in-js.dev/*",
+      "zone_name": "css-in-js.dev"
     }
   ],
   "assets": {
