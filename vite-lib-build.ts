@@ -550,9 +550,6 @@ export default defineConfig(async (): Promise<UserConfig> => {
   // verbose built-in prefixer, disabled below).
   const cssTargets = browserslistToTargets(browserslist());
   const wywOptions: WywViteOptions = {
-    babelOptions: {
-      presets: ["@babel/preset-typescript"],
-    },
     // Keep readable `displayName_slug` names in dev; drop the prefix in prod so the
     // base class name collapses to the bare slug.
     displayName: !minifyClassNames,

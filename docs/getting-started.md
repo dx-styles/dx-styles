@@ -5,7 +5,7 @@ it.
 
 ```sh
 bun add dx-styles
-bun add -d @wyw-in-js/vite @babel/preset-typescript
+bun add -d @wyw-in-js/vite
 ```
 
 Use the package root for authoring APIs:
@@ -29,9 +29,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     wyw({
-      babelOptions: {
-        presets: ["@babel/preset-typescript"],
-      },
       processors: {
         dxStyles: {
           minifyClassNames: false,

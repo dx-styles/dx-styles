@@ -10,9 +10,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     wyw({
-      babelOptions: {
-        presets: ["@babel/preset-typescript"],
-      },
       displayName: true,
       processors: {
         dxStyles: {

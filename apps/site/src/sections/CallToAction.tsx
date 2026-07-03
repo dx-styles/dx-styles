@@ -8,14 +8,12 @@ const INSTALL_SNIPPET = `bun add dx-styles
 //   @wyw-in-js/vite      @wyw-in-js/webpack
 //   @wyw-in-js/rollup    @wyw-in-js/esbuild
 //   @wyw-in-js/next
-bun add -d @wyw-in-js/vite @babel/preset-typescript
+bun add -d @wyw-in-js/vite
 
 // vite.config.ts - same options across plugins
 import wyw from "@wyw-in-js/vite";
 export default {
-  plugins: [
-    wyw({ babelOptions: { presets: ["@babel/preset-typescript"] } }),
-  ],
+  plugins: [wyw()],
 };
 
 // Component.tsx - inline or in a colocated *.styles.ts

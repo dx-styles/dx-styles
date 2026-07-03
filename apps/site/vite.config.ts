@@ -20,9 +20,6 @@ export default defineConfig({
   plugins: [
     react(),
     wyw({
-      babelOptions: {
-        presets: ["@babel/preset-typescript"],
-      },
       displayName: true,
       preserveCssPaths: true,
       tagResolver: (source: string, tag: string): string | null => {
