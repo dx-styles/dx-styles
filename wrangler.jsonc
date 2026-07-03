@@ -1,6 +1,17 @@
 {
   "name": "dx-styles",
   "compatibility_date": "2026-07-03",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "dx-styles.dev",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.dx-styles.dev",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./apps/site/dist",
     "not_found_handling": "single-page-application"
