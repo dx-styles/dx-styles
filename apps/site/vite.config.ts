@@ -6,6 +6,15 @@ import { defineConfig } from "vite";
 
 const workspaceRoot = resolve(__dirname, "..", "..");
 
+const dxStylesProcessorByTag: Record<string, string> = {
+  css: "css",
+  recipe: "recipe",
+  slotRecipe: "slotRecipe",
+  createTheme: "createTheme",
+  createTokenContract: "createTokenContract",
+  createVar: "createVar",
+};
+
 export default defineConfig({
   root: __dirname,
   plugins: [
@@ -16,6 +25,15 @@ export default defineConfig({
       },
       displayName: true,
       preserveCssPaths: true,
+      tagResolver: (source: string, tag: string): string | null => {
+        if (source !== "dx-styles") {
+          return null;
+        }
+
+        const processor = dxStylesProcessorByTag[tag];
+
+        return processor ? resolve(workspaceRoot, "processors", `${processor}.js`) : null;
+      },
     }),
   ],
   resolve: {
