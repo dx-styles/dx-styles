@@ -101,7 +101,7 @@
     "site:build:app": "bun run --cwd apps/site build",
     "site:dev": "bun run --cwd apps/site dev",
     "site:test": "bun run --cwd apps/site test",
-    "test": "bun run build:wyw && bun run build:js && bun run src/__tests__/run.ts && bun run site:test",
+    "test": "bun run build:wyw && bun run build:js && bun run src/__tests__/run.ts && bun run site:test && bun test test/worker.test.ts",
     "typecheck": "bunx tsc -b tsconfig.json",
     "version": "bunx changeset version && bun install --lockfile-only --no-frozen-lockfile"
   },

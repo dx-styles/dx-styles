@@ -19,6 +19,7 @@
     "processors/*.ts",
     "preeval-runtime.ts",
     "style-primitives.ts",
+    "worker.ts",
     "test/**/*.ts",
     "tooling/**/*.ts"
   ]

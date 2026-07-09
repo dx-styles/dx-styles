@@ -2,6 +2,7 @@
   "name": "dx-styles",
   "compatibility_date": "2026-07-03",
   "workers_dev": false,
+  "main": "worker.ts",
   "routes": [
     {
       "pattern": "dx-styles.dev/*",
@@ -22,6 +23,8 @@
   ],
   "assets": {
     "directory": "./apps/site/dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
   }
 }
