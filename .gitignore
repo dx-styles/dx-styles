@@ -1,6 +1,7 @@
 node_modules
 dist
 apps/site/dist
+apps/site/dist-ssr
 .tmp
 coverage
 *.tsbuildinfo

@@ -27,8 +27,13 @@ button { font-family: inherit; }
 }
 `;
 
+export const siteResetCss = RESET;
+
 export function mountGlobal(): void {
   document.documentElement.classList.add(siteTheme);
+  if (document.head.querySelector('style[data-dx-site-reset="true"]') !== null) {
+    return;
+  }
   const styleEl = document.createElement("style");
   styleEl.setAttribute("data-dx-site-reset", "true");
   styleEl.textContent = RESET;

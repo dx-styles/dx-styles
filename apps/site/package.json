@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build --config vite.config.ts",
+    "build": "vite build --config vite.config.ts && vite build --config vite.config.ts --ssr src/entry-prerender.tsx --outDir dist-ssr && bun scripts/prerender.mjs",
     "dev": "vite --config vite.config.ts",
     "test": "bun test --preload ../../test/setup.ts --preload ../../test/setupDxStyles.ts src --bail 1"
   },
