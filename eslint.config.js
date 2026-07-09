@@ -15,6 +15,7 @@ export default defineConfig([
     ".tmp",
     "apps/site/dist",
     "dist",
+    "examples",
     "node_modules",
     "coverage",
     "preeval-runtime.d.ts",
