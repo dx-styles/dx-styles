@@ -18,3 +18,4 @@ style-primitives.js
 .env
 .env.local
 .env.*.local
+.next

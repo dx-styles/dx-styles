@@ -80,6 +80,7 @@
     "eslint": "9.39.1",
     "globals": "17.6.0",
     "lightningcss": "1.32.0",
+    "marked": "^18.0.6",
     "prettier": "3.8.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
