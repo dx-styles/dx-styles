@@ -27,9 +27,12 @@ jobs:
         run: bun run ci
 
       # Trusted publishing (OIDC) needs npm >= 11.5.1; the runner's bundled npm may be older.
+      # Stay on npm 11: npm 12 changed `npm info --json` to emit an array, which
+      # @changesets/cli (<= 2.31.0) reads as "version never published", so every push to main
+      # retries the publish and fails with "cannot publish over the previously published versions".
       - name: Update npm for trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11
           npm --version
 
       - name: Create release pull request or publish
