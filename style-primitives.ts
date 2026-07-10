@@ -87,7 +87,17 @@ export function readStyleHandleClassName(value: unknown): null | string {
   return descriptor.className;
 }
 
+function hasDxStylesDescriptorKey(value: unknown): boolean {
+  return isPlainObject(value) && Object.hasOwn(value, DX_STYLES_DESCRIPTOR_KEY);
+}
+
 function assertValidStyleEntry(key: string, value: StyleEntry): void {
+  if (key.includes("[object Object]")) {
+    throw new Error(
+      `dx-styles style key "${key}" contains "[object Object]"; class values cannot be interpolated into selector keys. Use slotRecipe() or a literal class/data-attribute selector instead — see docs/migration.`,
+    );
+  }
+
   if (isRtlMarkerKey(key)) {
     if (value !== true) {
       throw new Error(`dx-styles ${key} marker only accepts true.`);
@@ -105,6 +115,12 @@ function assertValidStyleEntry(key: string, value: StyleEntry): void {
   if (readStyleHandleClassName(value) !== null) {
     throw new Error(
       `dx-styles style property "${key}" cannot reference a style handle; compose handles with css(handle, { ... }) instead.`,
+    );
+  }
+
+  if (hasDxStylesDescriptorKey(value)) {
+    throw new Error(
+      `dx-styles style property "${key}" cannot embed a css()/recipe()/createTheme() result; compose class results as top-level css() parts instead.`,
     );
   }
 
@@ -254,7 +270,7 @@ export function resolveStylePartWith(
     return {};
   }
 
-  if (hasCssDescriptorMarker(part)) {
+  if (hasDxStylesDescriptorKey(part)) {
     throw new Error(
       "dx-styles css() supports only style objects and previously declared css() results.",
     );

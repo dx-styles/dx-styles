@@ -59,6 +59,7 @@ import { createRuntimeRecipe } from "../runtime";
 
 interface PreevalRuntimeModule {
   readonly preevalCss: (...parts: readonly unknown[]) => unknown;
+  readonly preevalRecipe: (config: unknown) => unknown;
 }
 
 interface StyleHandleDescriptorForTest {
@@ -71,11 +72,16 @@ interface RootEntryModule {
 }
 
 function isPreevalRuntimeModule(value: unknown): value is PreevalRuntimeModule {
-  if (typeof value !== "object" || value === null || !("preevalCss" in value)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("preevalCss" in value) ||
+    !("preevalRecipe" in value)
+  ) {
     return false;
   }
 
-  return typeof value.preevalCss === "function";
+  return typeof value.preevalCss === "function" && typeof value.preevalRecipe === "function";
 }
 
 function isStyleHandleDescriptorForTest(value: unknown): value is StyleHandleDescriptorForTest {
@@ -601,6 +607,28 @@ function testRuntimeHelpers() {
     /style property "color" cannot use non-primitive array values/u,
   );
 
+  // Interpolating an object into a selector key stringifies it to
+  // "[object Object]"; the same guard protects build-time extraction.
+  assert.throws(
+    () =>
+      css({
+        ".[object Object] &": {
+          color: "blue",
+        },
+      }),
+    /class values cannot be interpolated into selector keys/u,
+  );
+
+  assert.throws(
+    () =>
+      css({
+        "&:hover": {
+          __dxStyles: {},
+        },
+      }),
+    /style property "&:hover" cannot embed a css\(\)\/recipe\(\)\/createTheme\(\) result/u,
+  );
+
   assert.throws(
     () =>
       css({
@@ -1060,7 +1088,7 @@ async function testBuiltPreevalRuntimeModule() {
 }
 
 function testPreevalRuntimeHelpers() {
-  const { preevalCss } = loadPreevalRuntime();
+  const { preevalCss, preevalRecipe } = loadPreevalRuntime();
 
   assert.throws(() => preevalCss("foo"), /previously declared css\(\) results/u);
 
@@ -1091,6 +1119,21 @@ function testPreevalRuntimeHelpers() {
 
   assert.throws(
     () => preevalCss({ __dxStyles: { kind: "css", style: undefined } }),
+    /style objects and previously declared css\(\) results/u,
+  );
+
+  assert.throws(
+    () => preevalCss({ ".[object Object] &": { color: "blue" } }),
+    /class values cannot be interpolated into selector keys/u,
+  );
+
+  assert.throws(
+    () => preevalCss({ "&:hover": preevalCss({ color: "red" }) }),
+    /style property "&:hover" cannot embed a css\(\)\/recipe\(\)\/createTheme\(\) result/u,
+  );
+
+  assert.throws(
+    () => preevalCss(preevalRecipe({ base: { color: "red" } })),
     /style objects and previously declared css\(\) results/u,
   );
 
@@ -1572,6 +1615,85 @@ async function testCssTransformRejectsNestedStyleHandles() {
         "public-style-handle-invalid-style-array.ts",
       ),
     /style property "color" cannot use non-primitive array values/u,
+  );
+}
+
+async function testCssTransformRejectsClassValuesInSelectorKeys() {
+  // Interpolating a css()/recipe() result into a selector key stringifies the
+  // preeval descriptor to "[object Object]"; the build must fail instead of
+  // emitting the garbage selector.
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { css } from "dx-styles";
+
+          const parent = css({ color: "red" });
+
+          export const child = css({
+            [\`.\${parent} &\`]: {
+              color: "blue",
+            },
+          });
+        `,
+        "css-class-value-in-selector-key.ts",
+      ),
+    /class values cannot be interpolated into selector keys/u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { css, recipe } from "dx-styles";
+
+          const button = recipe({ base: { color: "red" }, variants: {} });
+
+          export const child = css({
+            [\`\${button} &\`]: {
+              color: "blue",
+            },
+          });
+        `,
+        "recipe-class-value-in-selector-key.ts",
+      ),
+    /class values cannot be interpolated into selector keys/u,
+  );
+}
+
+async function testCssTransformRejectsEmbeddedDescriptorValues() {
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { css } from "dx-styles";
+
+          const parent = css({ color: "red" });
+
+          export const child = css({
+            "&:hover": parent,
+          });
+        `,
+        "css-descriptor-as-style-value.ts",
+      ),
+    /style property "&:hover" cannot embed a css\(\)\/recipe\(\)\/createTheme\(\) result/u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { css, recipe } from "dx-styles";
+
+          const button = recipe({ base: { color: "red" }, variants: {} });
+
+          export const child = css(button, {
+            color: "blue",
+          });
+        `,
+        "recipe-as-css-part.ts",
+      ),
+    /style objects and previously declared css\(\) results/u,
   );
 }
 
@@ -3626,6 +3748,8 @@ async function main() {
   await testCssTransform();
   await testCssTransformComposesPublicStyleHandles();
   await testCssTransformRejectsNestedStyleHandles();
+  await testCssTransformRejectsClassValuesInSelectorKeys();
+  await testCssTransformRejectsEmbeddedDescriptorValues();
   await testCssRtlTransform();
   await testCssRtlTransformPreservesNestedScopes();
   await testCssRtlTransformRespectsNoFlip();

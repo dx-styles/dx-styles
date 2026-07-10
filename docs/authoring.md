@@ -35,6 +35,11 @@ export const panel = css({
 });
 ```
 
+Selector keys must be literal strings. Interpolating a `css()`/`recipe()` result into a selector
+key (`` [`.${parent} &`] ``) or nesting one as a style value fails the build: class values cannot
+be interpolated into selectors. Group coordinated elements with a
+[slot recipe](./slot-recipes.md), or target a literal class or `[data-*]` attribute you own.
+
 Use `cx(...)` to join class names at runtime:
 
 ```ts
