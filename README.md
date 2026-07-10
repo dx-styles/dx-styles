@@ -87,12 +87,12 @@ Every column is a good library; pick by constraints. Corrections welcome —
 | Compile-time RTL | ✅ | ❌ | ✅ ⁵ | ❌ | ± logical properties | ± logical properties |
 | Project status | active | maintained (stable) ⁶ | alpha, on hold | active | active | active |
 
-¹ StyleX ships a small runtime for style merging.
-² `variants` inside `styled()`; no standalone recipe or slot primitive.
-³ Via `@vanilla-extract/recipes`.
-⁴ A documented composition pattern rather than a first-class API.
-⁵ Via `generateForBothDir`.
-⁶ New engine work happens in [wyw-in-js](https://github.com/Anber/wyw-in-js).
+- ¹ StyleX ships a small runtime for style merging.
+- ² `variants` inside `styled()`; no standalone recipe or slot primitive.
+- ³ Via `@vanilla-extract/recipes`.
+- ⁴ A documented composition pattern rather than a first-class API.
+- ⁵ Via `generateForBothDir`.
+- ⁶ New engine work happens in [wyw-in-js](https://github.com/Anber/wyw-in-js).
 
 ## Public API
 
