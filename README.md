@@ -12,6 +12,13 @@ Use it when you need:
 
 This package does not insert styles at runtime. CSS is emitted by the shared build pipeline and loaded as normal module-side artifacts.
 
+## Try it
+
+- [Vite starter on StackBlitz](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/vite) — token contract, two themes, `css()` + `recipe()`.
+- [Next.js starter on StackBlitz](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/next) — the same demo running in React Server Components.
+
+Both starters live in [`examples/`](./examples) and run locally with `npm install && npm run dev`.
+
 ## Public API
 
 - `css`
