@@ -23,6 +23,12 @@ The authoring API is small:
 - [Explain tooling](./explain.md)
 - [Release process](./release-process.md)
 
+## Migration
+
+- [From styled-components](./migration/from-styled-components.md)
+- [From Linaria](./migration/from-linaria.md)
+- [From Pigment CSS](./migration/from-pigment-css.md)
+
 ## Runtime Model
 
 `dx-styles` does not insert CSS rules at runtime. Build tooling extracts authored style objects into
