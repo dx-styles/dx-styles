@@ -885,27 +885,93 @@ export function expectSlotRecipeConfig(value: unknown): LooseSlotRecipeConfig {
   return value;
 }
 
-function encodeClassNameSegment(value: number | string): string {
-  const buffer = Buffer.from(String(value), "utf8");
-  return `${buffer.length.toString(36)}_${buffer.toString("hex")}`;
+function sanitizeClassNameLabelSegment(value: number | string): string {
+  return String(value)
+    .replace(/[^0-9A-Za-z_-]+/gu, "-")
+    .replace(/-{2,}/gu, "-")
+    .replace(/^-+|-+$/gu, "");
 }
 
-// In dev each segment is length-prefixed hex (verbose but human-decodable). In
-// prod the whole segment tuple collapses into one short deterministic hash; the
-// readable structure stays available through the explain manifest, not the name.
-// `stableStringify` is used (not a delimiter join) so the serialization stays
-// unambiguous when axis/value/slot names contain arbitrary characters — a join
-// would let e.g. {"a":{"b c":…}} and {"a b":{"c":…}} hash to the same name.
-function createScopedClassName(
+interface ScopedClassNameRequest {
+  /**
+   * Tuple hashed for minified names and readable-collision fallbacks. Its shape
+   * is part of the shipped class-name contract: changing it changes every
+   * minified class name.
+   */
+  readonly hashParts: readonly (number | string)[];
+  /** Human-readable segments joined into the non-minified suffix. */
+  readonly labelParts: readonly (number | string)[];
+}
+
+// Non-minified names read as `${className}__${label}` (e.g.
+// `button__appearance-primary`). Label sanitizing is lossy, so distinct tuples
+// can collapse to the same label; any label that ends up empty, reserved, or
+// claimed by more than one tuple deterministically falls back to the tuple hash
+// (the exact hash minified mode always uses) so names stay collision-free
+// without giving up readability in the common case. Hashes are fed
+// `stableStringify` (not a delimiter join) so tuples like {"a":{"b c":…}} and
+// {"a b":{"c":…}} stay distinct.
+function createScopedClassNames(
   className: string,
   minify: boolean,
-  ...parts: readonly (number | string)[]
-): string {
+  requests: readonly ScopedClassNameRequest[],
+  reservedLabels: readonly string[],
+): readonly string[] {
+  const hashes = requests.map(({ hashParts }) => hashString(stableStringify(hashParts)));
+
   if (minify) {
-    return `${className}_${hashString(stableStringify(parts))}`;
+    return hashes.map((hash) => `${className}_${hash}`);
   }
 
-  return [className, ...parts.map(encodeClassNameSegment)].join("__");
+  const labels = requests.map(({ labelParts }) =>
+    labelParts
+      .map(sanitizeClassNameLabelSegment)
+      .filter((segment) => segment.length > 0)
+      .join("-"),
+  );
+  const labelCounts = new Map<string, number>();
+  [...reservedLabels, ...labels].forEach((label) => {
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  });
+
+  const names = labels.map((label, index) => {
+    if (label.length > 0 && labelCounts.get(label) === 1) {
+      return `${className}__${label}`;
+    }
+
+    return `${className}__${label.length > 0 ? `${label}-` : ""}${hashes[index]}`;
+  });
+
+  const allNames = [...reservedLabels.map((label) => `${className}__${label}`), ...names];
+  if (new Set(allNames).size !== allNames.length) {
+    throw new Error(
+      `dx-styles could not derive unique scoped class names for "${className}"; rename the conflicting variant axis, value, or slot names.`,
+    );
+  }
+
+  return names;
+}
+
+function createScopedClassNameLookup(
+  className: string,
+  minify: boolean,
+  requests: readonly ScopedClassNameRequest[],
+  reservedLabels: readonly string[],
+): (...hashParts: readonly (number | string)[]) => string {
+  const names = createScopedClassNames(className, minify, requests, reservedLabels);
+  const namesByHashParts = new Map(
+    requests.map((request, index) => [stableStringify(request.hashParts), names[index]]),
+  );
+
+  return (...hashParts) => {
+    const name = namesByHashParts.get(stableStringify(hashParts));
+
+    if (name === undefined) {
+      throw new Error(`dx-styles scoped class name request was not registered: ${hashParts.join(", ")}.`);
+    }
+
+    return name;
+  };
 }
 
 export function shouldMinifyClassNames(options: unknown): boolean {
@@ -924,14 +990,34 @@ export function createRecipeRuntimeDefinition(
 ): RuntimeRecipeDefinition {
   const variants = config.variants ?? {};
   const variantOrder = Object.keys(variants);
+  const compoundEntries = (config.compoundVariants ?? []).map((entry, index) =>
+    expectCompoundVariantEntry(entry, "recipe", index, new Set(variantOrder)),
+  );
+  const scopedClassName = createScopedClassNameLookup(
+    className,
+    minify,
+    [
+      ...compoundEntries.map((_entry, index) => ({
+        hashParts: ["compound", index],
+        labelParts: ["compound", index],
+      })),
+      ...variantOrder.flatMap((axis) =>
+        Object.keys(variants[axis] ?? {}).map((value) => ({
+          hashParts: ["variant", axis, value],
+          labelParts: [axis, value],
+        })),
+      ),
+    ],
+    // `${className}__base` is allocated outside the lookup; reserving its label
+    // keeps variants that sanitize to "base" from colliding with it.
+    ["base"],
+  );
 
   return {
     baseClassName: hasDefinedStylePart(config.base) ? `${className}__base` : undefined,
-    compoundVariants: (config.compoundVariants ?? []).map((entry, index) => {
-      const { matches } = expectCompoundVariantEntry(entry, "recipe", index, new Set(variantOrder));
-
+    compoundVariants: compoundEntries.map(({ matches }, index) => {
       return {
-        className: createScopedClassName(className, minify, "compound", index),
+        className: scopedClassName("compound", index),
         matches,
       };
     }),
@@ -943,7 +1029,7 @@ export function createRecipeRuntimeDefinition(
         Object.fromEntries(
           Object.keys(variants[axis] ?? {}).map((value) => [
             value,
-            createScopedClassName(className, minify, "variant", axis, value),
+            scopedClassName("variant", axis, value),
           ]),
         ),
       ]),
@@ -960,31 +1046,72 @@ export function createSlotRecipeRuntimeDefinition(
   const variantOrder = Object.keys(variants);
   const baseStyles =
     config.base === undefined ? {} : expectSlotStyleMap(config.base, config.slots, "base");
+  const compoundEntries = (config.compoundVariants ?? []).map((entry, index) => {
+    const { css, matches } = expectCompoundVariantEntry(
+      entry,
+      "slotRecipe",
+      index,
+      new Set(variantOrder),
+    );
+
+    return {
+      cssBySlot: expectSlotStyleMap(css, config.slots, `compound variant #${index} css`),
+      matches,
+    };
+  });
+  const variantEntries = variantOrder.map((axis) => ({
+    axis,
+    values: Object.entries(variants[axis] ?? {}).map(([value, styles]) => ({
+      value,
+      slotStyles: expectSlotStyleMap(styles, config.slots, `variant "${axis}.${value}"`),
+    })),
+  }));
+  const scopedClassName = createScopedClassNameLookup(
+    className,
+    minify,
+    [
+      ...config.slots
+        .filter((slot) => hasDefinedStylePart(baseStyles[slot]))
+        .map((slot) => ({
+          hashParts: ["base-slot", slot],
+          labelParts: [slot],
+        })),
+      ...compoundEntries.flatMap(({ cssBySlot }, index) =>
+        config.slots
+          .filter((slot) => hasDefinedStylePart(cssBySlot[slot]))
+          .map((slot) => ({
+            hashParts: ["compound-slot", index, slot],
+            labelParts: [slot, "compound", index],
+          })),
+      ),
+      ...variantEntries.flatMap(({ axis, values }) =>
+        values.flatMap(({ value, slotStyles }) =>
+          config.slots
+            .filter((slot) => hasDefinedStylePart(slotStyles[slot]))
+            .map((slot) => ({
+              hashParts: ["slot-variant", axis, value, slot],
+              labelParts: [slot, axis, value],
+            })),
+        ),
+      ),
+    ],
+    [],
+  );
 
   return {
     baseClassNames: Object.fromEntries(
       config.slots.map((slot) => [
         slot,
-        hasDefinedStylePart(baseStyles[slot])
-          ? createScopedClassName(className, minify, "base-slot", slot)
-          : "",
+        hasDefinedStylePart(baseStyles[slot]) ? scopedClassName("base-slot", slot) : "",
       ]),
     ),
-    compoundVariants: (config.compoundVariants ?? []).map((entry, index) => {
-      const { css, matches } = expectCompoundVariantEntry(
-        entry,
-        "slotRecipe",
-        index,
-        new Set(variantOrder),
-      );
-      const cssBySlot = expectSlotStyleMap(css, config.slots, `compound variant #${index} css`);
-
+    compoundVariants: compoundEntries.map(({ cssBySlot, matches }, index) => {
       return {
         classNames: Object.fromEntries(
           config.slots.map((slot) => [
             slot,
             hasDefinedStylePart(cssBySlot[slot])
-              ? createScopedClassName(className, minify, "compound-slot", index, slot)
+              ? scopedClassName("compound-slot", index, slot)
               : "",
           ]),
         ),
@@ -995,23 +1122,17 @@ export function createSlotRecipeRuntimeDefinition(
     slots: config.slots,
     variantOrder,
     variants: Object.fromEntries(
-      variantOrder.map((axis) => [
+      variantEntries.map(({ axis, values }) => [
         axis,
         Object.fromEntries(
-          Object.entries(variants[axis] ?? {}).map(([value, styles]) => {
-            const slotStyles = expectSlotStyleMap(
-              styles,
-              config.slots,
-              `variant "${axis}.${value}"`,
-            );
-
+          values.map(({ value, slotStyles }) => {
             return [
               value,
               Object.fromEntries(
                 config.slots.map((slot) => [
                   slot,
                   hasDefinedStylePart(slotStyles[slot])
-                    ? createScopedClassName(className, minify, "slot-variant", axis, value, slot)
+                    ? scopedClassName("slot-variant", axis, value, slot)
                     : "",
                 ]),
               ),

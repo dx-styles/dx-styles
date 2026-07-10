@@ -27,7 +27,11 @@ import { disposeEvalBroker, transform, TransformCacheCollection } from "@wyw-in-
 
 import { findDxStylesExplainPayload } from "../../processors/explain-schema.ts";
 import { createValueNode } from "../../processors/serialization.ts";
-import { createRecipeRuntimeDefinition, toCSSStyle } from "../../processors/shared.ts";
+import {
+  createRecipeRuntimeDefinition,
+  createSlotRecipeRuntimeDefinition,
+  toCSSStyle,
+} from "../../processors/shared.ts";
 import {
   createDxStylesExplainIndex,
   createDxStylesExplainManifest,
@@ -176,11 +180,6 @@ async function runWywTransform(
     disposeEvalBroker(cache);
   }
 }
-
-// Scoped class names in dev embed length-prefixed hex segments (e.g. `__c_736c…`).
-// Prod minification must collapse them into one short hash, so this pattern is the
-// signal that the verbose form leaked through.
-const HEX_SEGMENT_PATTERN = /__[0-9a-z]+_(?:[0-9a-f]{2})+/u;
 
 function extractCssSelectors(cssText: string): string[] {
   return Array.from(cssText.matchAll(/\.([^{\s,]+)\s*\{/gu), (match) => match[1]);
@@ -1195,6 +1194,163 @@ function testProcessorRuntimeDefinitionsPreserveSpecialMatches() {
   assert.equal(readOwnStringProperty(compoundVariant.matches, specialAxis), "active");
 }
 
+function testRecipeRuntimeDefinitionKeepsReadableClassNames() {
+  const definition = createRecipeRuntimeDefinition(
+    "button_x1",
+    {
+      base: { color: "red" },
+      compoundVariants: [{ appearance: "primary", css: { fontWeight: 700 } }],
+      variants: {
+        appearance: {
+          primary: { color: "blue" },
+          outline: { color: "teal" },
+        },
+        size: {
+          sm: { padding: 4 },
+        },
+      },
+    },
+    false,
+  );
+
+  assert.equal(definition.baseClassName, "button_x1__base");
+  assert.equal(definition.variants.appearance.primary, "button_x1__appearance-primary");
+  assert.equal(definition.variants.appearance.outline, "button_x1__appearance-outline");
+  assert.equal(definition.variants.size.sm, "button_x1__size-sm");
+  assert.equal(
+    expectPresent(definition.compoundVariants[0], "Expected compound variant.").className,
+    "button_x1__compound-0",
+  );
+}
+
+function testSlotRecipeRuntimeDefinitionKeepsReadableClassNames() {
+  const definition = createSlotRecipeRuntimeDefinition(
+    "field_x1",
+    {
+      slots: ["root", "label"],
+      base: { root: { display: "grid" } },
+      compoundVariants: [{ size: "md", css: { label: { fontWeight: 700 } } }],
+      variants: {
+        size: {
+          md: {
+            root: { gap: 8 },
+            label: { color: "blue" },
+          },
+        },
+      },
+    },
+    false,
+  );
+  const compoundVariant = expectPresent(
+    definition.compoundVariants[0],
+    "Expected slot compound variant.",
+  );
+
+  assert.equal(definition.baseClassNames.root, "field_x1__root");
+  assert.equal(definition.baseClassNames.label, "");
+  assert.equal(definition.variants.size.md.root, "field_x1__root-size-md");
+  assert.equal(definition.variants.size.md.label, "field_x1__label-size-md");
+  assert.equal(compoundVariant.classNames.label, "field_x1__label-compound-0");
+  assert.equal(compoundVariant.classNames.root, "");
+}
+
+function testRecipeRuntimeDefinitionDisambiguatesReadableLabels() {
+  const config = {
+    base: { color: "red" },
+    compoundVariants: [{ compound: "0", css: { fontWeight: 700 } }],
+    variants: {
+      compound: { "0": { color: "blue" } },
+      a: { "b-c": { color: "teal" } },
+      "a-b": { c: { color: "plum" } },
+      base: { "%": { color: "gray" } },
+    },
+  } as const;
+  const definition = createRecipeRuntimeDefinition("button_x1", config, false);
+
+  // "compound-0" is claimed by both the compound variant and the variant tuple;
+  // the deterministic tuple hash keeps the two class names distinct.
+  const compoundClassName = expectPresent(
+    definition.compoundVariants[0],
+    "Expected compound variant.",
+  ).className;
+  const axisClassName = definition.variants.compound["0"];
+  assert.notEqual(compoundClassName, axisClassName);
+  [compoundClassName, axisClassName].forEach((className) => {
+    assert.match(className, /^button_x1__compound-0-[0-9a-z]+$/u);
+  });
+
+  // Sanitized labels collapse {"a":{"b-c"}} and {"a-b":{"c"}} to "a-b-c"; the
+  // hash fallback must keep them apart.
+  assert.notEqual(definition.variants.a["b-c"], definition.variants["a-b"].c);
+  [definition.variants.a["b-c"], definition.variants["a-b"].c].forEach((className) => {
+    assert.match(className, /^button_x1__a-b-c-[0-9a-z]+$/u);
+  });
+
+  // "base" is reserved for the base class, and "%" sanitizes to an empty
+  // segment, so the variant label collapses to "base" and must be hashed away
+  // from `button_x1__base`.
+  assert.equal(definition.baseClassName, "button_x1__base");
+  assert.notEqual(definition.variants.base["%"], "button_x1__base");
+  assert.match(definition.variants.base["%"], /^button_x1__base-[0-9a-z]+$/u);
+
+  // All generated names stay selector-safe and unique.
+  const allClassNames = [
+    compoundClassName,
+    ...Object.values(definition.variants).flatMap((values) => Object.values(values)),
+  ];
+  allClassNames.forEach((className) => {
+    assert.match(className, /^[0-9A-Za-z_-]+$/u);
+  });
+  assert.equal(new Set(allClassNames).size, allClassNames.length);
+
+  // Identical configs resolve to identical names on every build.
+  assert.deepEqual(createRecipeRuntimeDefinition("button_x1", config, false), definition);
+}
+
+function testRecipeRuntimeDefinitionMinifiedClassNamesAreStable() {
+  // Locked to the dx-styles@1.0.0 minified output: these exact class names
+  // shipped to consumers and must stay byte-identical for identical configs.
+  const definition = createRecipeRuntimeDefinition(
+    "button_x1",
+    {
+      compoundVariants: [{ appearance: "primary", css: { fontWeight: 700 } }],
+      variants: {
+        appearance: { primary: { color: "blue" } },
+        size: { sm: { padding: 4 } },
+      },
+    },
+    true,
+  );
+
+  assert.equal(definition.variants.appearance.primary, "button_x1_7xs7ox");
+  assert.equal(definition.variants.size.sm, "button_x1_mq2cwe");
+  assert.equal(
+    expectPresent(definition.compoundVariants[0], "Expected compound variant.").className,
+    "button_x1_64otyw",
+  );
+
+  const slotDefinition = createSlotRecipeRuntimeDefinition(
+    "field_x1",
+    {
+      slots: ["root", "label"],
+      base: { root: { display: "grid" } },
+      compoundVariants: [{ size: "md", css: { label: { fontWeight: 700 } } }],
+      variants: {
+        size: { md: { root: { gap: 8 } } },
+      },
+    },
+    true,
+  );
+
+  assert.equal(slotDefinition.baseClassNames.root, "field_x1_g9pemf");
+  assert.equal(slotDefinition.variants.size.md.root, "field_x1_fiwg79");
+  assert.equal(
+    expectPresent(slotDefinition.compoundVariants[0], "Expected slot compound variant.")
+      .classNames.label,
+    "field_x1_hv57xe",
+  );
+}
+
 function testPackageExports() {
   const packageJsonValue: unknown = JSON.parse(
     readFileSync(join(process.cwd(), "package.json"), "utf8"),
@@ -1783,9 +1939,13 @@ async function testRecipeTransformMinifiesClassNames() {
   const devCss = dev.cssText ?? "";
   const prodCss = prod.cssText ?? "";
 
-  // Dev keeps the verbose hex-encoded scoped segments; prod collapses them.
-  assert.match(devCss, HEX_SEGMENT_PATTERN);
-  assert.equal(HEX_SEGMENT_PATTERN.test(prodCss), false);
+  // Dev keeps readable scoped suffixes; prod collapses them into short hashes.
+  const devSelectors = extractCssSelectors(devCss);
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__base")));
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__intent-primary")));
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__compound-0")));
+  assert.equal(prodCss.includes("intent-primary"), false);
+  assert.equal(prodCss.includes("compound-0"), false);
   assert.ok(prodCss.length < devCss.length);
 
   const prodSelectors = extractCssSelectors(prodCss);
@@ -1847,6 +2007,44 @@ async function testRecipeTransformMinifyDisambiguatesSegments() {
     2,
     "minified variant class names must not collide across segment boundaries",
   );
+}
+
+async function testRecipeTransformDisambiguatesReadableSegments() {
+  // Same regression as the minified variant above, for readable dev names:
+  // ["a","b c"] and ["a b","c"] both sanitize to the "a-b-c" label, so the
+  // deterministic hash fallback must keep the two class names apart.
+  const result = await runWywTransform(
+    `
+      import { recipe } from "dx-styles";
+
+      export const button = recipe({
+        variants: {
+          "a": {
+            "b c": {
+              color: "red",
+            },
+          },
+          "a b": {
+            c: {
+              color: "blue",
+            },
+          },
+        },
+      });
+    `,
+    "recipe-readable-collision.ts",
+  );
+
+  const selectors = extractCssSelectors(result.cssText ?? "");
+  assert.equal(selectors.length, 2);
+  assert.equal(
+    new Set(selectors).size,
+    2,
+    "readable variant class names must not collide across segment boundaries",
+  );
+  selectors.forEach((selector) => {
+    assert.match(selector, /__a-b-c-[0-9a-z]+$/u);
+  });
 }
 
 async function testRecipeRtlTransform() {
@@ -2110,9 +2308,15 @@ async function testSlotRecipeTransformMinifiesClassNames() {
   const devCss = dev.cssText ?? "";
   const prodCss = prod.cssText ?? "";
 
-  // The slot-variant path is the worst offender in dev; prod must collapse it.
-  assert.match(devCss, HEX_SEGMENT_PATTERN);
-  assert.equal(HEX_SEGMENT_PATTERN.test(prodCss), false);
+  // The slot-variant path is the longest readable suffix in dev; prod must
+  // collapse it into one short hash.
+  const devSelectors = extractCssSelectors(devCss);
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__root")));
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__body")));
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__body-size-md")));
+  assert.ok(devSelectors.some((selector) => selector.endsWith("__root-compound-0")));
+  assert.equal(prodCss.includes("size-md"), false);
+  assert.equal(prodCss.includes("compound-0"), false);
   assert.ok(prodCss.length < devCss.length);
 
   const prodSelectors = extractCssSelectors(prodCss);
@@ -3413,6 +3617,10 @@ async function main() {
   testRuntimeSerializerPreservesSpecialDataProperties();
   testStyleObjectsPreserveSpecialDataProperties();
   testProcessorRuntimeDefinitionsPreserveSpecialMatches();
+  testRecipeRuntimeDefinitionKeepsReadableClassNames();
+  testSlotRecipeRuntimeDefinitionKeepsReadableClassNames();
+  testRecipeRuntimeDefinitionDisambiguatesReadableLabels();
+  testRecipeRuntimeDefinitionMinifiedClassNamesAreStable();
   testPackageExports();
   await testPackageExportConditionResolution();
   await testCssTransform();
@@ -3430,6 +3638,7 @@ async function main() {
   await testRecipeTransform();
   await testRecipeTransformMinifiesClassNames();
   await testRecipeTransformMinifyDisambiguatesSegments();
+  await testRecipeTransformDisambiguatesReadableSegments();
   await testRecipeRtlTransform();
   await testRecipeTransformUsesSafeVariantSelectors();
   await testRecipeTransformRejectsMalformedCompoundVariants();

@@ -29,6 +29,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [
     wyw({
+      prefixer: false,
       processors: {
         dxStyles: {
           minifyClassNames: false,
@@ -38,6 +39,12 @@ export default defineConfig({
   ],
 });
 ```
+
+Set `prefixer: false`: WyW's built-in stylis prefixer is on by default and emits legacy IE-era
+expansions (for example `display: -ms-grid`) that modern browsers never read. If you still need
+vendor prefixes for older targets, generate them from your browserslist config instead — for
+example Vite's `css: { transformer: "lightningcss" }` with `browserslistToTargets` — so only the
+prefixes your targets actually require are emitted.
 
 The generated CSS is emitted by the build pipeline. Application code imports JavaScript modules in
 the usual way and receives class names at runtime.
