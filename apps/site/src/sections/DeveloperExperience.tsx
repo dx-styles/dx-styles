@@ -10,17 +10,16 @@ import {
   grid,
 } from "./DeveloperExperience.styles";
 
-const explainOutput = `class    dxs_button_out
+const explainOutput = `class    button_bhhycyd__appearance-primary
 source   button/styles.ts:14:5
-symbol   buttonRoot · recipe()
+symbol   button · recipe()
 variant  appearance="primary"
-         size="md"
 compose  ← focusRing.ts:7  (css)
          ← styles.ts:18    (recipe.base)
 css
-  display: inline-flex;
   background: var(--button-bg-primary);
-  min-height: 32px;`;
+  border-color: transparent;
+  color: var(--button-fg-primary);`;
 
 const diagnosticOutput = `warning  use logical "insetInlineEnd"
          instead of "right"
@@ -73,7 +72,7 @@ const items: readonly DxItem[] = [
     description:
       "Resolve any emitted class back to its authoring file, recipe node, slot context, and composition edges. Open a CSS bug, run explain, jump straight to the source.",
     code: explainOutput,
-    filename: "$ bun run explain dxs_button_out",
+    filename: "$ bun run explain button_bhhycyd__appearance-primary",
     language: "shell",
     pill: "explain tool",
   },
@@ -150,8 +149,8 @@ export const DeveloperExperience = (): JSX.Element => {
             </p>
           </div>
           <CodeBlock language="shell" filename="git diff dist/components/button.css" size="sm">
-            {`- .dxs_button_out { background: var(--button-bg-primary); ... }
-+ .dxs_button_out { background: var(--button-bg-primary); ...
+            {`- .button_bhhycyd__size-md { min-height: 32px; ... }
++ .button_bhhycyd__size-md { min-height: 32px; ...
 +   padding-inline: var(--button-spacing-md); }`}
           </CodeBlock>
         </div>
