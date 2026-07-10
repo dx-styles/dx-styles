@@ -114,6 +114,11 @@ Every column is a good library; pick by constraints. Corrections welcome —
 - [WyW integration](./docs/wyw-integration.md)
 - [Release process](./docs/release-process.md)
 
+Migrating from another library? Dedicated guides:
+[styled-components](./docs/migration/from-styled-components.md) ·
+[Linaria](./docs/migration/from-linaria.md) ·
+[Pigment CSS](./docs/migration/from-pigment-css.md)
+
 ## Style Handle Serialization
 
 Public `StyleHandle` values carry a frozen enumerable `__dxStyles` descriptor so WyW can serialize
