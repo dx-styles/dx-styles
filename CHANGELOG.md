@@ -1,5 +1,21 @@
 # dx-styles
 
+## 1.1.1
+
+### Patch Changes
+
+- [#8](https://github.com/dx-styles/dx-styles/pull/8) [`d9eb5e4`](https://github.com/dx-styles/dx-styles/commit/d9eb5e4f277c219a1ec992d95758c9c3b2cc5881) Thanks [@Anber](https://github.com/Anber)! - Fail the build when a `css()`/`recipe()` result leaks into a style object instead of silently
+  emitting garbage CSS.
+
+  Interpolating a class value into a selector key (``css({ [`.${parent} &`]: … })``), nesting a
+  `css()` result as a style value (`css({ "&:hover": parent })`), or passing a
+  `recipe()`/`slotRecipe()`/`createTheme()` result as a `css()` part previously serialized the
+  build-time descriptor straight into the stylesheet (`.[object Object] .child_x1a2b3c{…}`,
+  `.child_x1a2b3c:hover __dxStyles{…}`) — surfacing, at best, as a downstream minifier syntax error.
+  All three shapes now fail static extraction and the runtime fallback with a clear diagnostic:
+  class values cannot be interpolated into selector keys. Group coordinated elements with
+  `slotRecipe()`, or target a literal class or data-attribute selector you own.
+
 ## 1.1.0
 
 ### Minor Changes
