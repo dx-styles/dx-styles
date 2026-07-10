@@ -7,6 +7,7 @@ const navItems = [
   { href: "#theme-studio", label: "Themes" },
   { href: "#pipeline", label: "Pipeline" },
   { href: "#dx", label: "DX" },
+  { href: "/blog/", label: "Blog" },
 ];
 
 export const TopNav = (): JSX.Element => {
