@@ -6,13 +6,13 @@ authoring symbols, variant branches, source locations, and composition edges.
 Run the repository helper against a WyW metadata artifact:
 
 ```sh
-bun run explain -- path/to/file.wyw-in-js.json dxs_button_root
+bun run explain -- path/to/file.wyw-in-js.json button_bhhycyd__tone-accent
 ```
 
 Example output:
 
 ```text
-class    dxs_button_root
+class    button_bhhycyd__tone-accent
 source   Button.styles.ts:8:21
 symbol   button - recipe()
 variant  tone="accent"
