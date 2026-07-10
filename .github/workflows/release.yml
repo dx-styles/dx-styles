@@ -26,6 +26,12 @@ jobs:
       - name: Build and test
         run: bun run ci
 
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; the runner's bundled npm may be older.
+      - name: Update npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Create release pull request or publish
         uses: changesets/action@v1
         with:
@@ -33,4 +39,3 @@ jobs:
           publish: bun run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
