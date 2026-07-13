@@ -30,9 +30,11 @@ jobs:
       # Stay on npm 11: npm 12 changed `npm info --json` to emit an array, which
       # @changesets/cli (<= 2.31.0) reads as "version never published", so every push to main
       # retries the publish and fails with "cannot publish over the previously published versions".
+      # sudo because npm 11 links its man pages into /usr/local/share/man, which is root-owned
+      # on the hosted runners (npm 12 dropped the man pages, so npm@latest installed without it).
       - name: Update npm for trusted publishing
         run: |
-          npm install -g npm@11
+          sudo npm install -g npm@11
           npm --version
 
       - name: Create release pull request or publish
