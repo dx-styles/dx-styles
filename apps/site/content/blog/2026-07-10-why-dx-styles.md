@@ -6,7 +6,11 @@ date: 2026-07-10
 
 Runtime CSS-in-JS is winding down. styled-components has been in maintenance mode since early 2025,
 Server Components made the runtime model a structural dead end, and the default advice is "just use
-Tailwind." That advice is fine — for many teams it's correct. But if what you actually want is typed
+Tailwind." That advice is fine — for many teams it's correct, though the surveys read like a
+complicated romance: [State of React 2025](https://2025.stateofreact.com/en-US/libraries/component-libraries/)
+calls it a love/hate relationship, and "excessive Tailwind usage" is the only framework entry in
+[State of CSS 2025's general pain points](https://2025.stateofcss.com/en-US/usage/#css_general_pain_points).
+But if what you actually want is typed
 styles, tokens, and variants living next to your components, the zero-runtime branch of CSS-in-JS is
 where that lives, and I've spent the last six years in it: I maintain Linaria, and I'm the author of
 [wyw-in-js](https://github.com/Anber/wyw-in-js) — the compile-time engine that powers Linaria and
@@ -15,9 +19,12 @@ MUI's Pigment CSS.
 [dx-styles](https://github.com/dx-styles/dx-styles) is what I built after all of that. This post is
 about why it exists.
 
-## What six years of issues taught me
+## What six years of zero-runtime CSS-in-JS taught me
 
-Two problems came back over and over. Neither is fixable without breaking what Linaria is.
+### Two problems I couldn't fix in Linaria
+
+They came back over and over in the issue tracker, and neither is fixable without breaking what
+Linaria is.
 
 **First: `styled`'s component interpolation is priced wrong.** `${Component}` inside a template
 looks free. In practice it's the single most common way extra code leaks into build-time
@@ -36,17 +43,7 @@ Both fixes move the center of gravity of the API. Remove `styled` — or even de
 broken most of what's built on Linaria. So Linaria stays what it is, and stays maintained. The next
 thing had to be a new thing.
 
-## The trigger
-
-My team started a component library from scratch, and Linaria turned out to be awkward in exactly
-the places a design system lives: tokens, variants, multipart components. We tried Griffel — itself
-a Linaria descendant, but through a fork that diverged around Linaria 3 and grew into a separate
-engine with no cross-compatibility with the wyw ecosystem: atomic classes didn't fit what we were
-building, and our custom processors would have meant maintaining two extraction pipelines side by
-side. At some point the conclusion was hard to avoid: we had more accumulated mileage with
-zero-runtime CSS-in-JS than anyone else, and we were spending it on working around our own tooling.
-
-## What Pigment taught me
+### What Pigment CSS taught me
 
 MUI built Pigment CSS on wyw-in-js, then put it on hold. My takeaway wasn't about MUI — it was
 about **speed**. On a greenfield project, build time is a habit you form early. But when you
@@ -62,6 +59,16 @@ static evaluation is the one from problem #1: `styled`.
 dx-styles isn't perfect here either. A few of its processors still hit the JS fallback — creating a
 token contract does, in some shapes. That's a known, solvable problem, and the fix lands with
 wyw-in-js@3 and dx-styles@2.
+
+## The trigger
+
+My team started a component library from scratch, and Linaria turned out to be awkward in exactly
+the places a design system lives: tokens, variants, multipart components. We tried Griffel — itself
+a Linaria descendant, but through a fork that diverged around Linaria 3 and grew into a separate
+engine with no cross-compatibility with the wyw ecosystem: atomic classes didn't fit what we were
+building, and our custom processors would have meant maintaining two extraction pipelines side by
+side. At some point the conclusion was hard to avoid: we had more accumulated mileage with
+zero-runtime CSS-in-JS than anyone else, and we were spending it on working around our own tooling.
 
 ## What dx-styles is
 
@@ -120,10 +127,14 @@ wyw-in-js@3 has a written plan — the high-level roadmap is public
 The honest constraint is volume: it's a lot of work, and its pace will scale with how much the
 community cares about this direction. No dates.
 
-Try it in 30 seconds: the
-[Vite starter on StackBlitz](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/vite),
-or the [Next.js one](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/next) if
-you want to see it inside Server Components. Migrating? There are dedicated guides for
+Try it without installing anything: the
+[Vite starter on StackBlitz](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/vite)
+is a ready-made sandbox — a themed button demo you can poke, edit, and watch the extracted CSS
+change; the [Next.js one](https://stackblitz.com/github/dx-styles/dx-styles/tree/main/examples/next)
+runs the same components inside React Server Components. Prefer starting from scratch?
+`npm install dx-styles` and the
+[getting started guide](https://github.com/dx-styles/dx-styles/blob/main/docs/getting-started.md).
+Migrating? There are dedicated guides for
 [styled-components](https://github.com/dx-styles/dx-styles/blob/main/docs/migration/from-styled-components.md),
 [Linaria](https://github.com/dx-styles/dx-styles/blob/main/docs/migration/from-linaria.md), and
 [Pigment CSS](https://github.com/dx-styles/dx-styles/blob/main/docs/migration/from-pigment-css.md).
