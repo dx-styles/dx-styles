@@ -26,12 +26,13 @@ about why it exists.
 They came back over and over in the issue tracker, and neither is fixable without breaking what
 Linaria is.
 
-**First: `styled`'s component interpolation is priced wrong.** `${Component}` inside a template
-looks free. In practice it's the single most common way extra code leaks into build-time
-evaluation — and the most common reason static evaluation gives up and falls back to actually
-running your module. Every mitigation we shipped over the years — explicit HOC hints in plugin
-options, special heuristics for shaking interpolated components — is a patch on a pattern the API
-itself encourages.
+**First: `styled(Component)` is priced wrong.** Wrapping a custom component looks like free
+composition — `styled(ButtonWithIcons)` and you're done. In practice the wrapped component drags
+its entire dependency graph — icons, hooks, half of your utils — into build-time evaluation.
+That's the single most common way extra code leaks into eval, and the most common reason static
+evaluation gives up and falls back to actually running your module. Every mitigation we shipped
+over the years — explicit HOC hints in plugin options, dedicated heuristics for shaking wrapped
+components — is a patch on a pattern the API itself encourages.
 
 **Second: composition.** Linaria hands you `css` and `cx` and wishes you luck. People have asked
 for style fragments for years, and I've pushed back every time: fragments would add chaos and
@@ -54,7 +55,7 @@ tens of minutes and tens of gigabytes of RAM.
 That experience pushed wyw-in-js toward static evaluation: prove what can be proven at build time,
 skip the evaluation sandbox entirely. The results so far are honestly mixed — but codebases that
 evaluate fully statically build several times faster. And the pattern that most reliably ruins
-static evaluation is the one from problem #1: `styled`.
+static evaluation is the one from problem #1: `styled(Component)`.
 
 dx-styles isn't perfect here either. A few of its processors still hit the JS fallback — creating a
 token contract does, in some shapes. That's a known, solvable problem, and the fix lands with
