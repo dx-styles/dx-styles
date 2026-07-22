@@ -45,3 +45,8 @@ return (
 ```
 
 Slot recipes keep class selection explicit and avoid runtime style object allocation.
+
+Components that expose slot recipe variants as props can use `RecipeVariantProps<typeof field>`
+for their variant type and `splitSlotRecipeProps(field, props)` to separate those variants from the
+props forwarded to the root element. The result has the same `{ variantProps, otherProps }` shape as
+`splitRecipeProps(...)`.

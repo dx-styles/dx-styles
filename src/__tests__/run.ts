@@ -49,6 +49,8 @@ import {
   cx,
   recipe,
   slotRecipe,
+  splitRecipeProps,
+  splitSlotRecipeProps,
 } from "../index";
 import {
   compileRuntimeRecipeDefinition,
@@ -69,6 +71,10 @@ interface StyleHandleDescriptorForTest {
 
 interface RootEntryModule {
   readonly createStyleHandle: (className: string) => object;
+  readonly recipe: typeof recipe;
+  readonly slotRecipe: typeof slotRecipe;
+  readonly splitRecipeProps: typeof splitRecipeProps;
+  readonly splitSlotRecipeProps: typeof splitSlotRecipeProps;
 }
 
 function isPreevalRuntimeModule(value: unknown): value is PreevalRuntimeModule {
@@ -97,11 +103,25 @@ function isStyleHandleDescriptorForTest(value: unknown): value is StyleHandleDes
 }
 
 function isRootEntryModule(value: unknown): value is RootEntryModule {
-  if (typeof value !== "object" || value === null || !("createStyleHandle" in value)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("createStyleHandle" in value) ||
+    !("recipe" in value) ||
+    !("slotRecipe" in value) ||
+    !("splitRecipeProps" in value) ||
+    !("splitSlotRecipeProps" in value)
+  ) {
     return false;
   }
 
-  return typeof value.createStyleHandle === "function";
+  return (
+    typeof value.createStyleHandle === "function" &&
+    typeof value.recipe === "function" &&
+    typeof value.slotRecipe === "function" &&
+    typeof value.splitRecipeProps === "function" &&
+    typeof value.splitSlotRecipeProps === "function"
+  );
 }
 
 function loadPreevalRuntime(): PreevalRuntimeModule {
@@ -1060,6 +1080,116 @@ function testRuntimeStyleHandles() {
   assert.equal(nestedExternalWrapperClassName.startsWith("external_root "), true);
 }
 
+function testRecipePropSplitting() {
+  const button = recipe({
+    variants: {
+      appearance: {
+        ghost: {
+          color: "blue",
+        },
+        primary: {
+          color: "white",
+        },
+      },
+      size: {
+        large: {
+          minHeight: 40,
+        },
+        small: {
+          minHeight: 28,
+        },
+      },
+    },
+  });
+  const metadataKey = Symbol("metadata");
+  const props = {
+    appearance: "ghost" as const,
+    className: "consumer",
+    disabled: true,
+    size: undefined,
+    [metadataKey]: "metadata",
+  };
+
+  Object.defineProperty(props, "hidden", {
+    enumerable: false,
+    value: "hidden",
+  });
+
+  const { otherProps, variantProps } = splitRecipeProps(button, props);
+
+  assert.deepEqual(variantProps, {
+    appearance: "ghost",
+    size: undefined,
+  });
+  assert.deepEqual(otherProps, {
+    className: "consumer",
+    disabled: true,
+    [metadataKey]: "metadata",
+  });
+  assert.equal(Object.hasOwn(variantProps, "size"), true);
+  assert.equal(Object.hasOwn(otherProps, "hidden"), false);
+  assert.equal(props.appearance, "ghost");
+  assert.match(button(variantProps), /^dxs_/u);
+
+  const specialAxis = "__proto__";
+  const specialRecipe = recipe({
+    variants: {
+      [specialAxis]: {
+        active: {
+          color: "blue",
+        },
+      },
+    },
+  });
+  const specialProps = Object.fromEntries([
+    [specialAxis, "active"],
+    ["constructor", "consumer"],
+  ]) as Record<typeof specialAxis, "active"> & { readonly constructor: string };
+  const specialSplit = splitRecipeProps(specialRecipe, specialProps);
+
+  assert.equal(Object.hasOwn(specialSplit.variantProps, specialAxis), true);
+  assert.equal(Reflect.get(specialSplit.variantProps, specialAxis), "active");
+  assert.equal(Reflect.getPrototypeOf(specialSplit.variantProps), Object.prototype);
+  assert.deepEqual(specialSplit.otherProps, { constructor: "consumer" });
+
+  const field = slotRecipe({
+    slots: ["root", "control"] as const,
+    variants: {
+      density: {
+        compact: {
+          control: {
+            minHeight: 28,
+          },
+        },
+        comfortable: {
+          control: {
+            minHeight: 36,
+          },
+        },
+      },
+    },
+  });
+  const splitFieldProps = splitSlotRecipeProps(field, {
+    density: "compact",
+    id: "email",
+  });
+
+  assert.deepEqual(splitFieldProps.variantProps, { density: "compact" });
+  assert.deepEqual(splitFieldProps.otherProps, { id: "email" });
+  assert.match(field(splitFieldProps.variantProps).control, /^dxs_/u);
+
+  assert.throws(() => {
+    splitRecipeProps(() => "", {});
+  }, /splitRecipeProps\(\) requires a dx-styles recipe/u);
+  assert.throws(() => {
+    // @ts-expect-error Intentional runtime validation check.
+    splitRecipeProps(button, null);
+  }, /splitRecipeProps\(\) requires a props object/u);
+  assert.throws(() => {
+    splitSlotRecipeProps(() => ({}), {});
+  }, /splitSlotRecipeProps\(\) requires a dx-styles slotRecipe/u);
+}
+
 async function testBuiltRootEntryStyleHandles() {
   const entryPath = join(process.cwd(), "dist/index.js");
   const moduleNamespace: unknown = await import(
@@ -1071,6 +1201,43 @@ async function testBuiltRootEntryStyleHandles() {
   const externalHandle = moduleNamespace.createStyleHandle("public_button_root");
 
   assertSerializableStyleHandle(externalHandle, "public_button_root");
+
+  const builtButton = moduleNamespace.recipe({
+    variants: {
+      size: {
+        small: {
+          minHeight: 28,
+        },
+      },
+    },
+  });
+  const builtButtonProps = moduleNamespace.splitRecipeProps(builtButton, {
+    id: "save",
+    size: "small",
+  });
+
+  assert.deepEqual(builtButtonProps.variantProps, { size: "small" });
+  assert.deepEqual(builtButtonProps.otherProps, { id: "save" });
+
+  const builtField = moduleNamespace.slotRecipe({
+    slots: ["root"] as const,
+    variants: {
+      density: {
+        compact: {
+          root: {
+            minHeight: 28,
+          },
+        },
+      },
+    },
+  });
+  const builtFieldProps = moduleNamespace.splitSlotRecipeProps(builtField, {
+    density: "compact",
+    id: "email",
+  });
+
+  assert.deepEqual(builtFieldProps.variantProps, { density: "compact" });
+  assert.deepEqual(builtFieldProps.otherProps, { id: "email" });
 }
 
 async function testBuiltPreevalRuntimeModule() {
@@ -3733,6 +3900,7 @@ async function testSharedLibraryBuildRemovesArtifactsWhenDxStylesSourceIsDeleted
 async function main() {
   testRuntimeHelpers();
   testRuntimeStyleHandles();
+  testRecipePropSplitting();
   await testBuiltRootEntryStyleHandles();
   await testBuiltPreevalRuntimeModule();
   testPreevalRuntimeHelpers();

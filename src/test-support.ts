@@ -13,6 +13,8 @@ import {
   cx,
   DX_STYLES_DESCRIPTOR_KEY,
   getDescriptorClassName,
+  splitRecipeProps as splitRecipePropsRuntime,
+  splitSlotRecipeProps as splitSlotRecipePropsRuntime,
   toCssClassName,
 } from "./internal";
 import type {
@@ -23,6 +25,7 @@ import type {
   Recipe,
   RecipeConfig,
   RecipeStyleHandles,
+  SplitRecipePropsResult,
   SlotRecipe,
   SlotRecipeConfig,
   SlotRecipeStyleHandles,
@@ -103,6 +106,24 @@ export function slotRecipe<
   };
 
   return attachRuntimeSlotRecipeDefinition(testSlotRecipe, definition);
+}
+
+export function splitRecipeProps<TVariants extends VariantDefinitions, TProps extends object>(
+  recipeValue: Recipe<TVariants>,
+  props: TProps & VariantSelection<NoInfer<TVariants>>,
+): SplitRecipePropsResult<VariantSelection<TVariants>, TProps> {
+  return splitRecipePropsRuntime(recipeValue, props);
+}
+
+export function splitSlotRecipeProps<
+  TSlot extends string,
+  TVariants extends SlotVariantDefinitions<TSlot>,
+  TProps extends object,
+>(
+  recipeValue: SlotRecipe<TSlot, TVariants>,
+  props: TProps & SlotVariantSelection<NoInfer<TVariants>>,
+): SplitRecipePropsResult<SlotVariantSelection<TVariants>, TProps> {
+  return splitSlotRecipePropsRuntime(recipeValue, props);
 }
 
 export function createStyleHandle(className: string): StyleHandle {
