@@ -7,7 +7,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@wyw-in-js/nextjs": "2.1.5",
+    "@wyw-in-js/nextjs": "^2.1.7",
     "dx-styles": "^1.0.0",
     "next": "^16.0.0",
     "react": "^19.0.0",
