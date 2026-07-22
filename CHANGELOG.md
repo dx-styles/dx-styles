@@ -1,5 +1,16 @@
 # dx-styles
 
+## 1.2.0
+
+### Minor Changes
+
+- [#15](https://github.com/dx-styles/dx-styles/pull/15) [`87e87f8`](https://github.com/dx-styles/dx-styles/commit/87e87f8aabe79147dc36e03f8c9b050e95da75a8) Thanks [@Anber](https://github.com/Anber)! - Add `splitRecipeProps` and `splitSlotRecipeProps` for separating variant selections from component
+  props, plus `RecipeVariantProps` for deriving the accepted variant prop type from a recipe.
+
+### Patch Changes
+
+- [#17](https://github.com/dx-styles/dx-styles/pull/17) [`9c6644f`](https://github.com/dx-styles/dx-styles/commit/9c6644fb1266fb7b4fe329658b25cf4a4b742cb7) Thanks [@Anber](https://github.com/Anber)! - Update WyW dependencies to their latest compatible versions and allow compatible minor updates.
+
 ## 1.1.0
 
 ### Minor Changes
