@@ -145,6 +145,15 @@ export type SlotRecipe<
 > = ((selection?: SlotVariantSelection<TVariants>) => Record<TSlot, string>) &
   RuntimeSlotRecipeDefinitionCarrier<TSlot>;
 
+export type RecipeVariantProps<TRecipe> = TRecipe extends (selection?: infer TSelection) => unknown
+  ? NonNullable<TSelection>
+  : never;
+
+export interface SplitRecipePropsResult<TVariantProps extends object, TProps extends object> {
+  readonly otherProps: Omit<TProps, keyof TVariantProps>;
+  readonly variantProps: TVariantProps;
+}
+
 export interface RecipeStyleHandles {
   readonly root: StyleHandle;
   readonly variants: Readonly<Record<string, Readonly<Record<string, StyleHandle>>>>;
@@ -592,10 +601,11 @@ export function attachRuntimeSlotRecipeDefinition<
 
 function readRuntimeRecipeDefinition(
   recipe: RuntimeRecipeDefinitionCarrier,
+  operation = "recipe style handles",
 ): RuntimeRecipeDefinition {
   const definition = recipe[RECIPE_DEFINITION_KEY];
   if (definition === undefined) {
-    throw new Error("dx-styles recipe style handles require a dx-styles recipe.");
+    throw new Error(`dx-styles ${operation} requires a dx-styles recipe.`);
   }
 
   return definition;
@@ -603,13 +613,84 @@ function readRuntimeRecipeDefinition(
 
 function readRuntimeSlotRecipeDefinition<TSlot extends string>(
   recipe: RuntimeSlotRecipeDefinitionCarrier<TSlot>,
+  operation = "slot recipe style handles",
 ): RuntimeSlotRecipeDefinition<TSlot> {
   const definition = recipe[SLOT_RECIPE_DEFINITION_KEY];
   if (definition === undefined) {
-    throw new Error("dx-styles slot recipe style handles require a dx-styles slotRecipe.");
+    throw new Error(`dx-styles ${operation} requires a dx-styles slotRecipe.`);
   }
 
   return definition;
+}
+
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+function copyEnumerableOwnProperty(source: object, target: object, key: PropertyKey): void {
+  const descriptor = Object.getOwnPropertyDescriptor(source, key);
+  if (descriptor?.enumerable !== true) {
+    return;
+  }
+
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    value: Reflect.get(source, key),
+    writable: true,
+  });
+}
+
+function splitPropsByVariantOrder<TVariantProps extends object, TProps extends object>(
+  props: TProps,
+  variantOrder: readonly string[],
+  operation: string,
+): SplitRecipePropsResult<TVariantProps, TProps> {
+  if (!isObjectLike(props)) {
+    throw new Error(`dx-styles ${operation} requires a props object.`);
+  }
+
+  const variantNames = new Set(variantOrder);
+  const variantProps = {};
+  const otherProps = {};
+
+  Reflect.ownKeys(props).forEach((key) => {
+    const target = typeof key === "string" && variantNames.has(key) ? variantProps : otherProps;
+    copyEnumerableOwnProperty(props, target, key);
+  });
+
+  return {
+    otherProps: otherProps as Omit<TProps, keyof TVariantProps>,
+    variantProps: variantProps as TVariantProps,
+  };
+}
+
+export function splitRecipeProps<TVariants extends VariantDefinitions, TProps extends object>(
+  recipe: Recipe<TVariants>,
+  props: TProps & VariantSelection<NoInfer<TVariants>>,
+): SplitRecipePropsResult<VariantSelection<TVariants>, TProps> {
+  const definition = readRuntimeRecipeDefinition(recipe, "splitRecipeProps()");
+  return splitPropsByVariantOrder<VariantSelection<TVariants>, TProps>(
+    props,
+    definition.variantOrder,
+    "splitRecipeProps()",
+  );
+}
+
+export function splitSlotRecipeProps<
+  TSlot extends string,
+  TVariants extends SlotVariantDefinitions<TSlot>,
+  TProps extends object,
+>(
+  recipe: SlotRecipe<TSlot, TVariants>,
+  props: TProps & SlotVariantSelection<NoInfer<TVariants>>,
+): SplitRecipePropsResult<SlotVariantSelection<TVariants>, TProps> {
+  const definition = readRuntimeSlotRecipeDefinition(recipe, "splitSlotRecipeProps()");
+  return splitPropsByVariantOrder<SlotVariantSelection<TVariants>, TProps>(
+    props,
+    definition.variantOrder,
+    "splitSlotRecipeProps()",
+  );
 }
 
 export function createRecipeStyleHandles<TVariants extends VariantDefinitions>(

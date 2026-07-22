@@ -99,6 +99,9 @@ Every column is a good library; pick by constraints. Corrections welcome —
 - `css`
 - `recipe`
 - `slotRecipe`
+- `splitRecipeProps`
+- `splitSlotRecipeProps`
+- `RecipeVariantProps` (type)
 - `createStyleHandle`
 - `createRecipeStyleHandles`
 - `createSlotRecipeStyleHandles`

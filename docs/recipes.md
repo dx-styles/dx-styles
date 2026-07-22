@@ -45,3 +45,31 @@ At runtime, the recipe only selects already extracted classes:
 ```
 
 Variant names and values are inferred from the recipe config, so invalid selections fail typecheck.
+
+## Exposing variants as component props
+
+Use `splitRecipeProps(...)` when a component accepts recipe variants alongside its ordinary props:
+
+```tsx
+import type { ComponentPropsWithRef } from "react";
+import { cx, type RecipeVariantProps, splitRecipeProps } from "dx-styles";
+
+type ButtonVariantProps = RecipeVariantProps<typeof button>;
+type ButtonProps = ButtonVariantProps &
+  Omit<ComponentPropsWithRef<"button">, keyof ButtonVariantProps>;
+
+export function Button(props: ButtonProps) {
+  const { otherProps, variantProps } = splitRecipeProps(button, props);
+
+  return (
+    <button
+      {...otherProps}
+      className={cx(otherProps.className, button(variantProps))}
+    />
+  );
+}
+```
+
+`variantProps` contains the recipe's variant axes, while `otherProps` contains the remaining own
+enumerable properties. The input object is not mutated. Omit recipe keys from the element props
+before intersecting the types so variant names such as `size` safely override native prop names.

@@ -10,10 +10,12 @@ import type {
   SlotRecipeConfig,
   SlotRecipeStyleHandles,
   SlotVariantDefinitions,
+  SlotVariantSelection,
   StyleHandle,
   StylePart,
   TokenContract,
   VariantDefinitions,
+  VariantSelection,
 } from "./internal";
 import {
   assignVars as assignVarsRuntime,
@@ -27,6 +29,8 @@ import {
   css as cssRuntime,
   cx,
   getDescriptorClassName,
+  splitRecipeProps as splitRecipePropsRuntime,
+  splitSlotRecipeProps as splitSlotRecipePropsRuntime,
 } from "./internal";
 import { createRuntimeRecipe, createRuntimeSlotRecipe } from "./runtime";
 
@@ -39,6 +43,7 @@ export type {
   Recipe,
   RecipeConfig,
   RecipeStyleHandles,
+  RecipeVariantProps,
   SlotRecipe,
   SlotRecipeConfig,
   SlotRecipeStyleHandles,
@@ -85,6 +90,36 @@ export function slotRecipe<
  * Composes arbitrary class name inputs into a stable deduplicated string.
  */
 export { cx };
+
+/**
+ * Splits recipe variant selections from the remaining component props.
+ */
+export function splitRecipeProps<TVariants extends VariantDefinitions, TProps extends object>(
+  recipeValue: Recipe<TVariants>,
+  props: TProps & VariantSelection<NoInfer<TVariants>>,
+): {
+  readonly otherProps: Omit<TProps, keyof VariantSelection<TVariants>>;
+  readonly variantProps: VariantSelection<TVariants>;
+} {
+  return splitRecipePropsRuntime(recipeValue, props);
+}
+
+/**
+ * Splits slot recipe variant selections from the remaining component props.
+ */
+export function splitSlotRecipeProps<
+  TSlot extends string,
+  TVariants extends SlotVariantDefinitions<TSlot>,
+  TProps extends object,
+>(
+  recipeValue: SlotRecipe<TSlot, TVariants>,
+  props: TProps & SlotVariantSelection<NoInfer<TVariants>>,
+): {
+  readonly otherProps: Omit<TProps, keyof SlotVariantSelection<TVariants>>;
+  readonly variantProps: SlotVariantSelection<TVariants>;
+} {
+  return splitSlotRecipePropsRuntime(recipeValue, props);
+}
 
 /**
  * Creates a serializable style handle for public component extension entrypoints.

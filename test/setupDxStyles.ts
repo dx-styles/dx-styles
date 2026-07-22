@@ -11,6 +11,8 @@ import {
   cx,
   recipe,
   slotRecipe,
+  splitRecipeProps,
+  splitSlotRecipeProps,
 } from "../src/test-support";
 
 await mock.module("dx-styles", () => ({
@@ -24,4 +26,6 @@ await mock.module("dx-styles", () => ({
   cx,
   recipe,
   slotRecipe,
+  splitRecipeProps,
+  splitSlotRecipeProps,
 }));
