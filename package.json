@@ -23,6 +23,7 @@
     "preeval-runtime.d.ts",
     "processors/*.js",
     "processors/*.d.ts",
+    "processors/*.manifest.json",
     "preeval-runtime.js",
     "src/style-handle-contract.js",
     "src/style-handle-contract.d.ts",
@@ -58,9 +59,9 @@
     }
   },
   "dependencies": {
-    "@wyw-in-js/processor-utils": "^2.1.0",
-    "@wyw-in-js/shared": "^2.1.0",
-    "@wyw-in-js/transform": "^2.1.6"
+    "@wyw-in-js/processor-utils": "^2.2.0",
+    "@wyw-in-js/shared": "^2.2.0",
+    "@wyw-in-js/transform": "^2.2.0"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
@@ -73,7 +74,7 @@
     "@types/react": "19.2.5",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
-    "@wyw-in-js/vite": "^2.1.6",
+    "@wyw-in-js/vite": "^2.2.0",
     "browserslist": "4.28.2",
     "bun-types": "1.3.14",
     "esbuild": "^0.28.1",
@@ -116,7 +117,7 @@
       "recipe": "./processors/recipe.js",
       "slotRecipe": "./processors/slotRecipe.js",
       "createTheme": "./processors/createTheme.js",
-      "createTokenContract": "./processors/createTokenContract.js",
+      "createTokenContract": "./processors/createTokenContract.manifest.json",
       "createVar": "./processors/createVar.js"
     }
   },

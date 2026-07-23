@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 
@@ -23,7 +23,12 @@ import {
   type ObjectProperty,
   type StringLiteral,
 } from "@wyw-in-js/processor-utils";
-import { disposeEvalBroker, transform, TransformCacheCollection } from "@wyw-in-js/transform";
+import {
+  disposeEvalBroker,
+  EventEmitter,
+  transform,
+  TransformCacheCollection,
+} from "@wyw-in-js/transform";
 
 import { findDxStylesExplainPayload } from "../../processors/explain-schema.ts";
 import { createValueNode } from "../../processors/serialization.ts";
@@ -173,21 +178,29 @@ async function runWywTransform(
     readonly outputMetadata?: boolean;
     readonly displayName?: boolean;
     readonly minifyClassNames?: boolean;
+    readonly evalStrategy?: "execute" | "hybrid" | "static";
+    readonly eventEmitter?: EventEmitter;
   } = {},
 ) {
-  const filename = join(process.cwd(), "src/__tests__/fixtures", fixtureName);
+  const filename = isAbsolute(fixtureName)
+    ? fixtureName
+    : join(process.cwd(), "src/__tests__/fixtures", fixtureName);
   const cache = new TransformCacheCollection();
 
   try {
     return await transform(
       {
         cache,
+        eventEmitter: options.eventEmitter,
         options: {
           filename,
           root: process.cwd(),
           pluginOptions: {
             configFile: false,
             displayName: options.displayName ?? true,
+            ...(options.evalStrategy === undefined
+              ? {}
+              : { eval: { strategy: options.evalStrategy } }),
             importOverrides: {
               "./preeval-runtime.js": { unknown: "allow" },
             },
@@ -2144,6 +2157,93 @@ async function testCreateTokenContractTransform() {
   assert.match(result.cssText ?? "", /color:var\(--tc-transform-color-accent\)/u);
 }
 
+async function testCreateTokenContractCrossFileStaticTransform() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-static-contract-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "cross-file-"));
+
+  const entrySource = [
+    'import { createTheme, css } from "dx-styles";',
+    'import { tokens } from "./tokens";',
+    "",
+    "export const surface = css({ color: tokens.color.accent });",
+    "",
+    "export const theme = createTheme(tokens, {",
+    "  color: {",
+    '    accent: "rebeccapurple",',
+    "  },",
+    '  spacing: "8px",',
+    "});",
+    "",
+  ].join("\n");
+
+  try {
+    await writeFile(
+      join(fixtureRoot, "tokens.ts"),
+      [
+        'import { createTokenContract } from "dx-styles";',
+        "",
+        "export const tokens = createTokenContract(",
+        "  {",
+        "    color: {",
+        "      accent: null,",
+        "    },",
+        '    spacing: "gap",',
+        "  },",
+        '  { prefix: "tc-static" },',
+        ");",
+        "",
+      ].join("\n"),
+    );
+
+    let evalFileCount = 0;
+    const eventEmitter = new EventEmitter(
+      (labels, type) => {
+        if (type === "start" && labels.method === "transform:evalFile") {
+          evalFileCount += 1;
+        }
+      },
+      () => 0,
+      () => {},
+    );
+
+    const staticResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      eventEmitter,
+    });
+
+    // The consumer resolves the imported contract statically: no module of the
+    // graph is executed at build time.
+    assert.equal(evalFileCount, 0);
+    // css() reads a contract leaf as a plain var() reference.
+    assert.match(staticResult.cssText ?? "", /color:var\(--tc-static-color-accent\)/u);
+    // createTheme() receives the imported contract value and assigns both the
+    // path-derived and the explicitly named leaves.
+    assert.match(staticResult.cssText ?? "", /--tc-static-color-accent:rebeccapurple/u);
+    assert.match(staticResult.cssText ?? "", /--tc-static-gap:8px/u);
+    // No live construction or preeval shim survives in the emitted code.
+    assert.equal(/createTokenContract\s*\(/u.test(staticResult.code), false, staticResult.code);
+    assert.equal(staticResult.code.includes("preevalCreateTokenContract"), false, staticResult.code);
+    // The static import is inlined away, but the contract module stays a watched
+    // dependency so edits still invalidate consumers.
+    assert.equal(staticResult.code.includes("./tokens"), false, staticResult.code);
+    assert.equal(
+      (staticResult.dependencies ?? []).some((dependency) => dependency.endsWith("tokens.ts")),
+      true,
+      JSON.stringify(staticResult.dependencies ?? []),
+    );
+
+    // Forcing the eval path produces byte-identical output: the static shortcut
+    // changes cost, not semantics.
+    const executeResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "execute",
+    });
+    assert.equal(staticResult.cssText, executeResult.cssText);
+    assert.equal(staticResult.code, executeResult.code);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
 async function testRecipeTransform() {
   const result = await runWywTransform(
     `
@@ -3927,6 +4027,7 @@ async function main() {
   await testCssTransformRejectsUnsupportedScalars();
   await testCreateVarTransform();
   await testCreateTokenContractTransform();
+  await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
   await testRecipeTransformMinifiesClassNames();
   await testRecipeTransformMinifyDisambiguatesSegments();
