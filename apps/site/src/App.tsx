@@ -1,5 +1,6 @@
 import { type ReactElement, useEffect, useMemo, useState } from "react";
 
+import { GitHubCorner } from "./components/GitHubCorner";
 import { TopNav } from "./components/TopNav";
 import { ApiShowcase } from "./sections/ApiShowcase";
 import { CallToAction } from "./sections/CallToAction";
@@ -48,6 +49,7 @@ export const App = (): ReactElement => {
 
   return (
     <div className={page}>
+      <GitHubCorner />
       <TopNav />
       <Hero />
       <Pillars />
