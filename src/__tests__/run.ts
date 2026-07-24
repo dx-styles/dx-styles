@@ -2095,6 +2095,170 @@ async function testCssTransformRejectsUnsupportedScalars() {
   );
 }
 
+// Guards the static-vs-eval equivalence of css() composition shapes. This is
+// also the acceptance harness for a future css() processor manifest: wyw's
+// current `style-object-call` semantics collapse css() results to a class-name
+// string, while the eval path sees a preeval descriptor (with registry side
+// effects and the "[object Object]" selector-key diagnostic built on top), so
+// the tag must stay on the JS implementation until wyw can express both value
+// domains. Every case below must stay byte-identical across strategies.
+async function testCssStaticParityMatrix() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-static-css-tests");
+  await mkdir(tempRootBase, { recursive: true });
+
+  const cases: readonly {
+    readonly entry: string;
+    readonly expectStatic: boolean;
+    readonly files?: Readonly<Record<string, string>>;
+    readonly name: string;
+  }[] = [
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        "",
+        'export const a = css({ color: "red" });',
+        "",
+      ].join("\n"),
+      expectStatic: true,
+      name: "plain-object",
+    },
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        "",
+        'export const a = css({ color: "red" }, { padding: "4px" });',
+        "",
+      ].join("\n"),
+      expectStatic: true,
+      name: "merge-two-objects",
+    },
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        "",
+        'const tokens = { accent: "rebeccapurple", pad: "6px" };',
+        "",
+        "export const a = css({ color: tokens.accent, padding: tokens.pad });",
+        "",
+      ].join("\n"),
+      expectStatic: true,
+      name: "same-file-const-refs",
+    },
+    {
+      entry: [
+        'import { createStyleHandle, css } from "dx-styles";',
+        "",
+        'const root = createStyleHandle("public_matrix_root");',
+        "",
+        'export const a = css(root, { color: "blue" });',
+        "",
+      ].join("\n"),
+      expectStatic: false,
+      name: "runtime-handle-compose",
+    },
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        "",
+        'const base = css({ color: "red" });',
+        "",
+        'export const b = css(base, { padding: "2px" });',
+        "",
+      ].join("\n"),
+      expectStatic: false,
+      name: "same-file-css-compose",
+    },
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        'import { base } from "./base";',
+        "",
+        'export const b = css(base, { padding: "2px" });',
+        "",
+      ].join("\n"),
+      expectStatic: false,
+      files: {
+        "base.ts": [
+          'import { css } from "dx-styles";',
+          "",
+          'export const base = css({ color: "red" });',
+          "",
+        ].join("\n"),
+      },
+      name: "cross-file-css-compose",
+    },
+    {
+      entry: [
+        'import { css } from "dx-styles";',
+        'import { pad } from "./dyn";',
+        "",
+        "export const a = css({ padding: pad });",
+        "",
+      ].join("\n"),
+      expectStatic: false,
+      files: {
+        // String(...) keeps the value deterministic while staying opaque to
+        // the static resolver, so the case exercises the eval fallback.
+        "dyn.ts": ['export const pad = String("3px");', ""].join("\n"),
+      },
+      name: "dynamic-arg",
+    },
+  ];
+
+  for (const item of cases) {
+    const fixtureRoot = await mkdtemp(join(tempRootBase, `${item.name}-`));
+    try {
+      await Promise.all(
+        Object.entries(item.files ?? {}).map(([name, source]) =>
+          writeFile(join(fixtureRoot, name), source),
+        ),
+      );
+
+      let evalFileCount = 0;
+      const eventEmitter = new EventEmitter(
+        (labels, type) => {
+          if (type === "start" && labels.method === "transform:evalFile") {
+            evalFileCount += 1;
+          }
+        },
+        () => 0,
+        () => {},
+      );
+
+      const staticResult = await runWywTransform(
+        item.entry,
+        join(fixtureRoot, "entry.ts"),
+        { eventEmitter },
+      );
+      const executeResult = await runWywTransform(
+        item.entry,
+        join(fixtureRoot, "entry.ts"),
+        { evalStrategy: "execute" },
+      );
+
+      assert.equal(
+        staticResult.cssText,
+        executeResult.cssText,
+        `cssText parity failed for "${item.name}"`,
+      );
+      assert.equal(
+        staticResult.code,
+        executeResult.code,
+        `code parity failed for "${item.name}"`,
+      );
+      if (item.expectStatic) {
+        assert.equal(
+          evalFileCount,
+          0,
+          `expected "${item.name}" to transform without eval`,
+        );
+      }
+    } finally {
+      await rm(fixtureRoot, { force: true, recursive: true });
+    }
+  }
+}
+
 async function testCreateVarTransform() {
   const result = await runWywTransform(
     `
@@ -4100,6 +4264,7 @@ async function main() {
   await testCssRtlTransformLeavesPlainStylesUnchanged();
   await testCssRtlTransformRejectsInvalidMarkers();
   await testCssTransformRejectsUnsupportedScalars();
+  await testCssStaticParityMatrix();
   await testCreateVarTransform();
   await testCreateVarCrossFileStaticTransform();
   await testCreateTokenContractTransform();
