@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "dx-styles/createTheme",
+  "implementation": "./createTheme.js",
+  "tags": ["createTheme"],
+  "semantics": {
+    "kind": "preeval-call",
+    "module": "../preeval-runtime.js",
+    "export": "preevalCreateTheme"
+  }
+}
