@@ -1,5 +1,33 @@
 # dx-styles
 
+## 1.3.0
+
+### Minor Changes
+
+- [#23](https://github.com/dx-styles/dx-styles/pull/23) [`b7d94d3`](https://github.com/dx-styles/dx-styles/commit/b7d94d3ba78b7fa463a352cc0ef1a75787020efc) Thanks [@Anber](https://github.com/Anber)! - `createVar()` now resolves statically at build time. The processor ships a
+  wyw-in-js manifest with `css-var-call` semantics: a private var's value form
+  is a pure function of its hashed slug (`var(--<hash>)`) with zero call
+  inputs, so files that declare or import private vars no longer drag their
+  modules into build-time evaluation. Output is unchanged.
+
+- [#24](https://github.com/dx-styles/dx-styles/pull/24) [`ef3e9e3`](https://github.com/dx-styles/dx-styles/commit/ef3e9e378447cf64bd9237158b1b5db6e2e62963) Thanks [@Anber](https://github.com/Anber)! - `css()` and `createTheme()` now resolve statically at build time through
+  wyw-in-js `preeval-call` manifests backed by this package's own preeval
+  runtime. Files that define or import css results — including css-in-css
+  composition chains, same-file and cross-file — no longer execute modules
+  during evaluation, while eval-domain semantics (descriptor values,
+  composition, diagnostics) stay byte-identical because the engine calls the
+  same preeval functions the eval path uses. Requires `@wyw-in-js/transform`
+  ^2.3.0.
+
+- [#21](https://github.com/dx-styles/dx-styles/pull/21) [`0868003`](https://github.com/dx-styles/dx-styles/commit/0868003f37263e97393848a733f187c1bf3c6098) Thanks [@Anber](https://github.com/Anber)! - `createTokenContract()` now resolves statically at build time. The processor
+  ships a wyw-in-js manifest with `token-contract-call` semantics, so files
+  that import a token contract read its value without executing the contract
+  module (or its dependency graph) during evaluation — consumers like `css()`
+  and `createTheme()` receive the contract as a static input. Leaf naming is
+  unchanged, and non-static shapes or prefixes keep falling back to the eval
+  path with identical output. Requires `@wyw-in-js/transform` ^2.2.0; the
+  `@wyw-in-js/*` dependency floors are bumped accordingly.
+
 ## 1.2.0
 
 ### Minor Changes
