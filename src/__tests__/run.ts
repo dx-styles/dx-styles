@@ -2165,7 +2165,7 @@ async function testCssStaticParityMatrix() {
         'export const b = css(base, { padding: "2px" });',
         "",
       ].join("\n"),
-      expectStatic: false,
+      expectStatic: true,
       name: "same-file-css-compose",
     },
     {
@@ -2176,7 +2176,7 @@ async function testCssStaticParityMatrix() {
         'export const b = css(base, { padding: "2px" });',
         "",
       ].join("\n"),
-      expectStatic: false,
+      expectStatic: true,
       files: {
         "base.ts": [
           'import { css } from "dx-styles";',

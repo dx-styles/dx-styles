@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "dx-styles/css",
+  "implementation": "./css.js",
+  "tags": ["css"],
+  "semantics": {
+    "kind": "preeval-call",
+    "module": "../preeval-runtime.js",
+    "export": "preevalCss"
+  }
+}
