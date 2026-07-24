@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "dx-styles/createVar",
+  "implementation": "./createVar.js",
+  "tags": ["createVar"],
+  "semantics": {
+    "kind": "css-var-call"
+  }
+}

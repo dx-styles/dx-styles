@@ -2117,6 +2117,81 @@ async function testCreateVarTransform() {
   assert.equal(name.startsWith("--dxds-"), false);
 }
 
+async function testCreateVarCrossFileStaticTransform() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-static-var-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "cross-file-"));
+
+  const entrySource = [
+    'import { css } from "dx-styles";',
+    'import { accent, surface } from "./vars";',
+    "",
+    "export const panel = css({",
+    "  background: surface,",
+    "  color: accent,",
+    "});",
+    "",
+  ].join("\n");
+
+  try {
+    await writeFile(
+      join(fixtureRoot, "vars.ts"),
+      [
+        'import { createVar } from "dx-styles";',
+        "",
+        "export const accent = createVar();",
+        "export const surface = createVar();",
+        "",
+      ].join("\n"),
+    );
+
+    let evalFileCount = 0;
+    const eventEmitter = new EventEmitter(
+      (labels, type) => {
+        if (type === "start" && labels.method === "transform:evalFile") {
+          evalFileCount += 1;
+        }
+      },
+      () => 0,
+      () => {},
+    );
+
+    const staticResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      eventEmitter,
+    });
+
+    // Imported private vars resolve statically: nothing is executed at build time.
+    assert.equal(evalFileCount, 0);
+    const cssText = staticResult.cssText ?? "";
+    const references = [...cssText.matchAll(/var\((--[a-zA-Z0-9_-]+)\)/gu)].map(
+      (match) => match[1],
+    );
+    // Both vars land as distinct hashed private names.
+    assert.equal(new Set(references).size, 2, cssText);
+    references.forEach((name) => {
+      assert.equal(name?.startsWith("--dxds-"), false);
+    });
+    // No live construction survives, and the inlined import stays a watched
+    // dependency so edits to the vars module still invalidate consumers.
+    assert.equal(/createVar\s*\(/u.test(staticResult.code), false, staticResult.code);
+    assert.equal(staticResult.code.includes("./vars"), false, staticResult.code);
+    assert.equal(
+      (staticResult.dependencies ?? []).some((dependency) => dependency.endsWith("vars.ts")),
+      true,
+      JSON.stringify(staticResult.dependencies ?? []),
+    );
+
+    // Forcing the eval path produces byte-identical output.
+    const executeResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "execute",
+    });
+    assert.equal(staticResult.cssText, executeResult.cssText);
+    assert.equal(staticResult.code, executeResult.code);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
 async function testCreateTokenContractTransform() {
   // Parity baseline: the runtime fallback names leaves purely from (shape, prefix).
   const runtimeContract = createTokenContract(
@@ -4026,6 +4101,7 @@ async function main() {
   await testCssRtlTransformRejectsInvalidMarkers();
   await testCssTransformRejectsUnsupportedScalars();
   await testCreateVarTransform();
+  await testCreateVarCrossFileStaticTransform();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
