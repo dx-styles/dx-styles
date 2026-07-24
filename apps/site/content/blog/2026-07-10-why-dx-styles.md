@@ -61,6 +61,9 @@ dx-styles isn't perfect here either. A few of its processors still hit the JS fa
 token contract does, in some shapes. That's a known, solvable problem, and the fix lands with
 wyw-in-js@3 and dx-styles@2.
 
+*Update (July 24): this shipped earlier than promised. The static-evaluation work landed in
+wyw-in-js 2.2 and 2.3, and as of dx-styles 1.3.0 the token-contract fallback is gone.*
+
 ## The trigger
 
 My team started a component library from scratch, and Linaria turned out to be awkward in exactly
