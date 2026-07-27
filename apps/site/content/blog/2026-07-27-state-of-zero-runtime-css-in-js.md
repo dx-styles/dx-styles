@@ -49,9 +49,9 @@ And the honest exits: **Tailwind** and **CSS Modules** are not CSS-in-JS, and fo
 | Compile-time RTL | yes | no | not documented | no | logical properties | logical properties |
 | Status | active | maintained, stable | active | active | active | active |
 
-¹ Dynamic interpolations in the styled API compile to CSS custom properties.
-² Ships a small runtime for style merging.
-³ Via `@vanilla-extract/recipes`.
+¹ Dynamic interpolations in the styled API compile to CSS custom properties.\
+² Ships a small runtime for style merging.\
+³ Via `@vanilla-extract/recipes`.\
 ⁴ next-yak cells reflect its public docs as of 9.7; corrections welcome.
 
 Pigment CSS is missing from the table on purpose: it remains in alpha and on hold, and recommending it today would not be a kindness. There are [migration guides](https://github.com/dx-styles/dx-styles/tree/main/docs/migration) off it, mine included.
