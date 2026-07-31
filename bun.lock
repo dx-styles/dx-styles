@@ -8,6 +8,7 @@
         "@wyw-in-js/processor-utils": "^2.3.0",
         "@wyw-in-js/shared": "^2.3.0",
         "@wyw-in-js/transform": "^2.3.0",
+        "csstype": "^3.2.3",
       },
       "devDependencies": {
         "@changesets/changelog-github": "^0.7.0",

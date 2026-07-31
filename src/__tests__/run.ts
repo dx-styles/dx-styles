@@ -665,6 +665,7 @@ function testRuntimeHelpers() {
   assert.throws(
     () =>
       css({
+        // @ts-expect-error Intentional runtime validation check.
         $rtl: false,
         color: "blue",
       }),
@@ -674,6 +675,7 @@ function testRuntimeHelpers() {
   assert.throws(
     () =>
       css({
+        // @ts-expect-error Intentional runtime validation check.
         color: true,
       }),
     /dx-styles style property "color" cannot be true/u,
