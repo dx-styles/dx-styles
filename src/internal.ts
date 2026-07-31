@@ -1,3 +1,5 @@
+import type { PropertiesFallback } from "csstype";
+
 import { DX_STYLES_DESCRIPTOR_KEY, STYLE_HANDLE_DESCRIPTOR_KIND } from "./style-handle-contract.js";
 import { createStyleHandleRegistry, normalizeStyleHandleClassName } from "./style-handle-support";
 
@@ -10,24 +12,45 @@ const STYLE_HANDLE_BRAND: unique symbol = Symbol("dx-styles.styleHandle");
 const HASH_MODULUS = 2147483647;
 const HASH_MULTIPLIER = 33;
 const HASH_SEED = 5381;
-
-declare const CSS_CLASS_NAME_BRAND: unique symbol;
+const CSS_CLASS_NAME_PREFIX = "dxs";
 
 export type StylePrimitive = number | string;
 export type StyleLeafValue = readonly StylePrimitive[] | StylePrimitive;
 type StyleEntry = false | null | StyleLeafValue | StyleObject | true | undefined;
 
-export interface StyleObject {
+/**
+ * Authoring shape of a style object.
+ *
+ * `PropertiesFallback` supplies the known CSS properties, so editors complete
+ * property names and their values (and arrays stay legal as fallback values).
+ * The `$rtl`/`$noflip` markers are declared explicitly so they are completed
+ * too — `assertValidStyleEntry` rejects any value other than `true`. The string
+ * index signature is the deliberate escape hatch: custom properties, nested
+ * selectors, at-rules, and properties `csstype` does not know yet.
+ */
+export type StyleObject = PropertiesFallback<number | string> & {
+  readonly $noflip?: true;
+  readonly $rtl?: true;
+} & {
   readonly [key: string]: StyleEntry;
-}
+};
 
 export interface StyleDescriptorCarrier {
   readonly [DX_STYLES_DESCRIPTOR_KEY]?: unknown;
 }
 
-export type CssClassName = string & {
-  readonly [CSS_CLASS_NAME_BRAND]: "dx-styles-css-class";
-};
+/**
+ * A class name produced by `css()`, `recipe()`, or `slotRecipe()`.
+ *
+ * Modelled as a template literal rather than a `string & { brand }`
+ * intersection on purpose. An intersection is an object type, so TypeScript
+ * offers every `String` member as a completion inside any object literal
+ * contextually typed by `StylePart` — which is what made IntelliSense inside
+ * `css({ ... })` useless. A template literal is a plain string subtype: it
+ * contributes no completions while still rejecting arbitrary strings, which
+ * `resolveStylePart` throws on at runtime.
+ */
+export type CssClassName = `${typeof CSS_CLASS_NAME_PREFIX}_${string}`;
 
 export interface StyleHandle extends StyleDescriptorCarrier {
   readonly [STYLE_HANDLE_BRAND]: "dx-styles-style-handle";
@@ -518,7 +541,7 @@ export function getDescriptorClassName(value: PreevalCssValue | PreevalThemeValu
 export function createCssDescriptor(...parts: StylePart[]): PreevalCssValue {
   const classNameRefs = collectStyleHandleClassNames(parts);
   const style = normalizeStyleParts(parts);
-  const className = toCssClassName(createRuntimeClassName("dxs", style));
+  const className = toCssClassName(createRuntimeClassName(CSS_CLASS_NAME_PREFIX, style));
 
   runtimeStyleHandleRegistry.registerStyle(className, style);
 
