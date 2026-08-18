@@ -120,7 +120,8 @@
       "slotRecipe": "./processors/slotRecipe.js",
       "createTheme": "./processors/createTheme.manifest.json",
       "createTokenContract": "./processors/createTokenContract.manifest.json",
-      "createVar": "./processors/createVar.manifest.json"
+      "createVar": "./processors/createVar.manifest.json",
+      "keyframes": "./processors/keyframes.manifest.json"
     }
   },
   "sharedLibBuild": {

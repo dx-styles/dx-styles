@@ -2467,6 +2467,102 @@ async function testCreateVarCrossFileStaticTransform() {
   }
 }
 
+async function testKeyframesTransform() {
+  const result = await runWywTransform(
+    `
+      import { css, keyframes } from "dx-styles";
+
+      export const spin = keyframes({
+        from: { transform: "rotate(0deg)" },
+        to: { transform: "rotate(360deg)" },
+      });
+
+      export const spinner = css({
+        animation: \`\${spin} 1s linear infinite\`,
+      });
+
+      export const label = css({
+        animationName: spin,
+      });
+    `,
+    "keyframes-basic.ts",
+  );
+
+  const nameMatch = /export const spin = "(spin_[^"\s]+)";/u.exec(result.code);
+  assert.ok(nameMatch, result.code);
+  const name = nameMatch[1];
+  const cssText = result.cssText ?? "";
+
+  // The rule is emitted top-level under the same deterministic name.
+  assert.ok(cssText.includes(`@keyframes ${name}{from{`), cssText);
+  // References embed the very same name as plain values.
+  assert.ok(cssText.includes(`animation:${name} 1s linear infinite`), cssText);
+  assert.ok(cssText.includes(`animation-name:${name}`), cssText);
+  // The name is never treated as a class.
+  assert.equal(cssText.includes(`.${name}`), false, cssText);
+}
+
+async function testKeyframesTransformRejectsInvalidConfigs() {
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes("spin");
+        `,
+        "keyframes-invalid-string.ts",
+      ),
+    /dx-styles keyframes\(\) requires a statically analyzable keyframes object\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes(
+            { from: { opacity: 0 } },
+            { to: { opacity: 1 } },
+          );
+        `,
+        "keyframes-invalid-arity.ts",
+      ),
+    /dx-styles keyframes\(\) takes exactly one keyframes object\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            from: { "&:hover": { color: "red" } },
+          });
+        `,
+        "keyframes-invalid-nested.ts",
+      ),
+    /dx-styles keyframes\(\) frame "from" cannot contain nested selectors \("&:hover"\)\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            $rtl: { transform: "none" },
+          });
+        `,
+        "keyframes-invalid-rtl.ts",
+      ),
+    /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
+  );
+}
+
 async function testCreateTokenContractTransform() {
   // Parity baseline: the runtime fallback names leaves purely from (shape, prefix).
   const runtimeContract = createTokenContract(
@@ -4424,6 +4520,8 @@ async function main() {
   await testCssStaticParityMatrix();
   await testCreateVarTransform();
   await testCreateVarCrossFileStaticTransform();
+  await testKeyframesTransform();
+  await testKeyframesTransformRejectsInvalidConfigs();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
