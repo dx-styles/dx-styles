@@ -2733,6 +2733,87 @@ async function testKeyframesCrossFileStaticTransform() {
   }
 }
 
+async function testCssInlineKeyframesScoping() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const spinner = css({
+        animation: "spin 1s linear infinite",
+        "@keyframes spin": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+      });
+
+      export const dangling = css({
+        animationName: "spin",
+      });
+
+      export const wave = css({
+        animation: ":global(wave) 2s infinite",
+        "@keyframes :global(wave)": {
+          from: { transform: "rotate(0)" },
+          to: { transform: "rotate(10deg)" },
+        },
+      });
+
+      // The documented global pattern: :global() on the declaration key only,
+      // plain name in the reference. A :global keyframes is not "scoped", so
+      // the suffixer leaves the plain reference alone.
+      export const pulse = css({
+        animation: "pulse 3s ease-in-out",
+        "@keyframes :global(pulse)": {
+          from: { opacity: 0.4 },
+          to: { opacity: 1 },
+        },
+      });
+    `,
+    "css-inline-keyframes.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  const spinnerClass = /export const spinner = "([^"\s]+)";/u.exec(result.code)?.[1];
+  assert.ok(spinnerClass, result.code);
+
+  // Inline keyframes are scoped per rule: name suffixed with the rule's class,
+  // same-rule animation shorthand rewritten (wyw's stylis keyframe suffixer).
+  assert.ok(cssText.includes(`@keyframes spin-${spinnerClass}{`), cssText);
+  assert.ok(cssText.includes(`animation:spin-${spinnerClass} 1s linear infinite`), cssText);
+
+  // Documented limitation: a cross-rule reference stays unscoped and dangles.
+  assert.ok(cssText.includes("animation-name:spin;"), cssText);
+  assert.equal(cssText.includes("@keyframes spin{"), false, cssText);
+
+  // :global() opts out of scoping for the @keyframes rule itself: it emits
+  // under the raw name "wave" (no suffix, no ":global(" wrapper).
+  assert.ok(cssText.includes("@keyframes wave{"), cssText);
+
+  // But the same-rule "animation" shorthand reference is NOT unwrapped here,
+  // and is not vendor-prefixed either — verified directly against
+  // @wyw-in-js/transform's stylis pipeline in isolation (independent of any
+  // dx-styles code). Root cause: dx-styles serializes declarations as
+  // "prop:value" with no space, so the value ":global(wave) 2s infinite"
+  // lands immediately after the property colon, producing "animation::global(...)".
+  // Stylis's own parser then folds that second colon into the *property name*
+  // itself (element.props becomes the string "animation:", not "animation"),
+  // which makes the keyframe-suffixer plugin's `animationPropsSet.has(props)`
+  // check miss entirely — so it skips both the vendor-prefix duplication and
+  // the :global() unwrap/rewrite for this declaration. The ":global(wave)"
+  // text therefore survives verbatim in the emitted CSS.
+  assert.ok(cssText.includes("animation::global(wave) 2s infinite;"), cssText);
+  assert.equal(cssText.includes("-webkit-animation::global(wave)"), false, cssText);
+  assert.ok(cssText.includes(":global(wave)"), cssText);
+
+  // The documented global pattern works end to end: the rule emits under the
+  // raw name, and the plain-name reference stays untouched and gets vendor
+  // prefixes like any other animation declaration.
+  assert.ok(cssText.includes("@keyframes pulse{"), cssText);
+  assert.ok(cssText.includes("animation:pulse 3s ease-in-out;"), cssText);
+  assert.ok(cssText.includes("-webkit-animation:pulse 3s ease-in-out;"), cssText);
+  assert.equal(cssText.includes(":global(pulse)"), false, cssText);
+}
+
 async function testCreateTokenContractTransform() {
   // Parity baseline: the runtime fallback names leaves purely from (shape, prefix).
   const runtimeContract = createTokenContract(
@@ -4695,6 +4776,7 @@ async function main() {
   await testKeyframesTransformRejectsInvalidConfigs();
   await testKeyframesUsageSurfaces();
   await testKeyframesCrossFileStaticTransform();
+  await testCssInlineKeyframesScoping();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
