@@ -2642,6 +2642,97 @@ async function testKeyframesUsageSurfaces() {
   assert.match(cssText, /\.badge_[^_{\s]+__motion-sliding\{/u);
 }
 
+async function testKeyframesCrossFileStaticTransform() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-static-keyframes-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "cross-file-"));
+
+  const motionSource = [
+    'import { keyframes } from "dx-styles";',
+    "",
+    "export const spin = keyframes({",
+    '  from: { transform: "rotate(0deg)" },',
+    '  to: { transform: "rotate(360deg)" },',
+    "});",
+    "",
+  ].join("\n");
+  const entrySource = [
+    'import { css } from "dx-styles";',
+    'import { spin } from "./motion";',
+    "",
+    "export const spinner = css({",
+    "  animationName: spin,",
+    "});",
+    "",
+  ].join("\n");
+
+  try {
+    await writeFile(join(fixtureRoot, "motion.ts"), motionSource);
+
+    let evalFileCount = 0;
+    const eventEmitter = new EventEmitter(
+      (labels, type) => {
+        if (type === "start" && labels.method === "transform:evalFile") {
+          evalFileCount += 1;
+        }
+      },
+      () => 0,
+      () => {},
+    );
+
+    const entryResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      eventEmitter,
+    });
+    const motionResult = await runWywTransform(motionSource, join(fixtureRoot, "motion.ts"));
+
+    // The name embedded into the consumer matches the emitted @keyframes rule
+    // from the declaring module's own transform — the determinism contract.
+    const declaredName = /@keyframes (spin_[^{\s]+)\{/u.exec(motionResult.cssText ?? "")?.[1];
+    assert.ok(declaredName, motionResult.cssText ?? "");
+    assert.ok(
+      (entryResult.cssText ?? "").includes(`animation-name:${declaredName}`),
+      entryResult.cssText ?? "",
+    );
+    // The consumer itself emits no @keyframes rule.
+    assert.equal((entryResult.cssText ?? "").includes("@keyframes"), false, entryResult.cssText);
+
+    // Static resolution handles the imported name without executing modules.
+    assert.equal(evalFileCount, 0);
+
+    // The default (static) output keeps a bare side-effect import of the
+    // declaring module — that import is load-bearing: it keeps motion.ts in
+    // the bundler graph so its @keyframes rule ships with the app CSS.
+    assert.ok(entryResult.code.includes('import "./motion";'), entryResult.code);
+
+    // Forcing full evaluation inlines the name and strips the import (engine
+    // behavior); the emitted CSS and the embedded animation name stay
+    // byte-identical across strategies.
+    const executeResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "execute",
+    });
+    assert.equal(entryResult.cssText, executeResult.cssText);
+    assert.ok(
+      (executeResult.cssText ?? "").includes(`animation-name:${declaredName}`),
+      executeResult.cssText ?? "",
+    );
+    assert.equal(executeResult.code.includes("./motion"), false, executeResult.code);
+    assert.ok(executeResult.code.includes(`animation-name`) === false, executeResult.code);
+
+    const embeddedName = (code: string) =>
+      /export const spinner = "([^"]+)";/u.exec(code)?.[1];
+    assert.equal(embeddedName(executeResult.code), embeddedName(entryResult.code));
+
+    // Hybrid parity too.
+    const hybridResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "hybrid",
+    });
+    assert.equal(entryResult.cssText, hybridResult.cssText);
+    assert.equal(entryResult.code, hybridResult.code);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
 async function testCreateTokenContractTransform() {
   // Parity baseline: the runtime fallback names leaves purely from (shape, prefix).
   const runtimeContract = createTokenContract(
@@ -4603,6 +4694,7 @@ async function main() {
   await testKeyframesTransform();
   await testKeyframesTransformRejectsInvalidConfigs();
   await testKeyframesUsageSurfaces();
+  await testKeyframesCrossFileStaticTransform();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
