@@ -3788,10 +3788,15 @@ async function testThemeTransformRejectsInvalidRootValues() {
 async function testExplainMetadataTransform() {
   const result = await runWywTransform(
     `
-      import { css, createTheme, createTokenContract, recipe, slotRecipe } from "dx-styles";
+      import { css, createTheme, createTokenContract, keyframes, recipe, slotRecipe } from "dx-styles";
 
       const shared = css({
         color: "red",
+      });
+
+      export const wobble = keyframes({
+        from: { transform: "rotate(-3deg)", visibility: undefined },
+        to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
       });
 
       export const button = css(shared, {
@@ -3888,6 +3893,10 @@ async function testExplainMetadataTransform() {
     processorsByName.get("themeClassName"),
     "themeClassName processor metadata is missing",
   );
+  const wobbleProcessor = expectPresent(
+    processorsByName.get("wobble"),
+    "wobble processor metadata is missing",
+  );
 
   const sharedExplain = findDxStylesExplainPayload(sharedProcessor.artifacts);
   const buttonExplain = findDxStylesExplainPayload(buttonProcessor.artifacts);
@@ -3955,7 +3964,44 @@ async function testExplainMetadataTransform() {
   assert.deepEqual(themeExplain.entries[0].variables, ["--explain-metadata-color-accent"]);
   assert.equal(typeof themeExplain.entries[0].preevalClassName, "string");
 
-  const manifest = createDxStylesExplainManifest(metadata, {
+  const wobbleExplain = findDxStylesExplainPayload(wobbleProcessor.artifacts);
+  if (wobbleExplain === null) {
+    throw new Error("dx-styles keyframes explain metadata is missing");
+  }
+
+  assert.equal(wobbleExplain.entries.length, 1);
+  const wobbleEntry = wobbleExplain.entries[0];
+  if (wobbleEntry.kind !== "keyframes") {
+    throw new Error(`expected keyframes explain entry, got "${wobbleEntry.kind}"`);
+  }
+  assert.equal(wobbleEntry.node, "keyframes");
+  assert.deepEqual(wobbleEntry.frames, ["from", "to"]);
+  assert.deepEqual(wobbleEntry.composeRefs, []);
+  assert.match(wobbleEntry.preevalClassName, /^dxk_[0-9a-z]+$/u);
+
+  // Twin-drift insurance: the processor's preevalClassName must equal the
+  // runtime fallback's name for identical frames — including normalization
+  // (the undefined value is dropped, the fallback array is preserved).
+  assert.equal(
+    wobbleEntry.preevalClassName,
+    keyframes({
+      from: { transform: "rotate(-3deg)", visibility: undefined },
+      to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
+    }),
+  );
+  assert.equal(
+    wobbleEntry.preevalClassName,
+    keyframes({
+      from: { transform: "rotate(-3deg)" },
+      to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
+    }),
+  );
+
+  // wyw 2.3.0 hardcodes `rules: {}` inside `result.metadata`; the populated,
+  // selector-keyed rules live on the top-level transform result. Merge them in
+  // the way a correct manifest producer should, so rule-derived record fields
+  // (selector, cssText) are exercised end to end.
+  const manifest = createDxStylesExplainManifest({ ...metadata, rules: result.rules ?? {} }, {
     cssFile: "src/explain-metadata.wyw-in-js.css",
     source: "src/explain-metadata.ts",
   });
@@ -3965,6 +4011,11 @@ async function testExplainMetadataTransform() {
   assert.equal(buttonRecords.length, 1);
   assert.equal(buttonRecords[0].compose[0].className, sharedExplain.entries[0].className);
   assert.equal(buttonRecords[0].compose[0].symbol, "shared");
+
+  const wobbleRecords = explainIndex.get(wobbleEntry.className);
+  assert.ok(wobbleRecords);
+  assert.equal(wobbleRecords.length, 1);
+  assert.equal(wobbleRecords[0].selector, `@keyframes ${wobbleEntry.className}`);
 }
 
 function testExplainManifestFormatting() {
