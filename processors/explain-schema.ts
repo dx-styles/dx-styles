@@ -43,8 +43,18 @@ export interface ThemeExplainEntry {
   readonly variables: readonly string[];
 }
 
+export interface KeyframesExplainEntry {
+  readonly className: string;
+  readonly composeRefs: readonly string[];
+  readonly frames: readonly string[];
+  readonly kind: "keyframes";
+  readonly node: "keyframes";
+  readonly preevalClassName: string;
+}
+
 export type DxStylesExplainEntry =
   | CssExplainEntry
+  | KeyframesExplainEntry
   | RecipeExplainEntry
   | SlotRecipeExplainEntry
   | ThemeExplainEntry;
@@ -81,6 +91,7 @@ export function isDxStylesExplainEntry(value: unknown): value is DxStylesExplain
       return (
         value.node === "style" &&
         typeof value.preevalClassName === "string" &&
+        value.frames === undefined &&
         value.matches === undefined &&
         value.slot === undefined &&
         value.variables === undefined &&
@@ -93,14 +104,28 @@ export function isDxStylesExplainEntry(value: unknown): value is DxStylesExplain
         typeof value.preevalClassName === "string" &&
         Array.isArray(value.variables) &&
         value.variables.every((entry) => typeof entry === "string") &&
+        value.frames === undefined &&
         value.matches === undefined &&
         value.slot === undefined &&
+        value.variant === undefined
+      );
+
+    case "keyframes":
+      return (
+        value.node === "keyframes" &&
+        typeof value.preevalClassName === "string" &&
+        Array.isArray(value.frames) &&
+        value.frames.every((entry) => typeof entry === "string") &&
+        value.matches === undefined &&
+        value.slot === undefined &&
+        value.variables === undefined &&
         value.variant === undefined
       );
 
     case "recipe":
       if (
         (value.node !== "base" && value.node !== "compound" && value.node !== "variant") ||
+        value.frames !== undefined ||
         value.preevalClassName !== undefined ||
         value.slot !== undefined ||
         value.variables !== undefined
@@ -122,6 +147,7 @@ export function isDxStylesExplainEntry(value: unknown): value is DxStylesExplain
       if (
         (value.node !== "base" && value.node !== "compound" && value.node !== "variant") ||
         typeof value.slot !== "string" ||
+        value.frames !== undefined ||
         value.preevalClassName !== undefined ||
         value.variables !== undefined
       ) {

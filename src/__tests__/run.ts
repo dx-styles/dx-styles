@@ -33,6 +33,7 @@ import {
 import { findDxStylesExplainPayload } from "../../processors/explain-schema.ts";
 import { createValueNode } from "../../processors/serialization.ts";
 import {
+  createExplainArtifact,
   createRecipeRuntimeDefinition,
   createSlotRecipeRuntimeDefinition,
   toCSSStyle,
@@ -3751,6 +3752,51 @@ function testExplainManifestFormatting() {
   assert.match(report, /missing\n {2}status: not found/u);
 }
 
+function testKeyframesExplainFormatting() {
+  const manifest = createDxStylesExplainManifest(
+    {
+      dependencies: [],
+      processors: [
+        {
+          artifacts: [
+            createExplainArtifact([
+              {
+                className: "wave_k1",
+                composeRefs: [],
+                frames: ["0%, 100%", "50%"],
+                kind: "keyframes",
+                node: "keyframes",
+                preevalClassName: "dxk_test",
+              },
+            ]),
+          ],
+          className: "wave_k1",
+          displayName: "wave",
+          start: { column: 3, line: 7 },
+        },
+      ],
+      replacements: [],
+      rules: {
+        "@keyframes wave_k1": {
+          className: "wave_k1",
+          cssText: "0%, 100%{transform:rotate(0);}50%{transform:rotate(10deg);}",
+          displayName: "wave",
+          start: { column: 3, line: 7 },
+        },
+      },
+    },
+    { cssFile: "src/wave.wyw-in-js.css", source: "src/wave.ts" },
+  );
+
+  const report = formatDxStylesExplainReport(manifest, ["wave_k1"]);
+
+  assert.ok(report.includes("kind: keyframes"), report);
+  assert.ok(report.includes("node: keyframes"), report);
+  assert.ok(report.includes("frames: 0%, 100% | 50%"), report);
+  assert.ok(report.includes("selector: @keyframes wave_k1"), report);
+  assert.ok(report.includes("symbol: wave"), report);
+}
+
 function testExplainManifestHandlesAmbiguousComposeRefs() {
   const manifest: DxStylesExplainManifest = {
     cssFile: "src/button.wyw-in-js.css",
@@ -4397,6 +4443,7 @@ async function main() {
   await testThemeTransformRejectsInvalidRootValues();
   await testExplainMetadataTransform();
   testExplainManifestFormatting();
+  testKeyframesExplainFormatting();
   testExplainManifestHandlesAmbiguousComposeRefs();
   await testDiagnosticsTransform();
   await testDiagnosticsDoNotRequireMetadataOutput();

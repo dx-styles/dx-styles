@@ -277,6 +277,10 @@ function formatExplainRecord(record: DxStylesExplainRecord): string {
     lines.push(`  variables: ${record.variables.join(", ")}`);
   }
 
+  if (record.kind === "keyframes" && record.frames.length > 0) {
+    lines.push(`  frames: ${record.frames.join(" | ")}`);
+  }
+
   if (record.selector !== undefined) {
     lines.push(`  selector: ${record.selector}`);
   }
