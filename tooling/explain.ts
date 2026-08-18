@@ -152,11 +152,48 @@ function hasPreevalClassName(
   return "preevalClassName" in record && typeof record.preevalClassName === "string";
 }
 
+// wyw-in-js (through at least 2.4.1) hardcodes `rules: {}` on the transform
+// metadata that the stock @wyw-in-js/vite plugin serializes into
+// `.wyw-in-js.json`; the populated selector-keyed rules exist only on the
+// top-level transform result, which never reaches the manifest. The same rules
+// are still recoverable from each processor's ["css", [rules, replacements]]
+// artifact — the exact source the extract stage merges them from.
+function collectDxStylesArtifactRules(
+  processors: readonly DxStylesTransformProcessorMetadata[],
+): Record<string, DxStylesRule> {
+  const rules: Record<string, DxStylesRule> = {};
+
+  processors.forEach((processor) => {
+    processor.artifacts.forEach(([kind, data]) => {
+      if (kind !== "css" || !Array.isArray(data)) {
+        return;
+      }
+
+      const [ruleset] = data as readonly unknown[];
+      if (!isRecord(ruleset)) {
+        return;
+      }
+
+      Object.entries(ruleset).forEach(([selector, rule]) => {
+        if (isDxStylesRule(rule)) {
+          rules[selector] = rule;
+        }
+      });
+    });
+  });
+
+  return rules;
+}
+
 export function createDxStylesExplainIndex(
   manifest: DxStylesExplainManifest,
 ): Map<string, readonly DxStylesExplainRecord[]> {
+  const rules = {
+    ...collectDxStylesArtifactRules(manifest.processors),
+    ...manifest.rules,
+  };
   const rulesByClassName = new Map(
-    Object.entries(manifest.rules).map(
+    Object.entries(rules).map(
       ([selector, rule]) => [rule.className, { rule, selector }] as const,
     ),
   );

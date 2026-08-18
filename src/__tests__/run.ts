@@ -3997,25 +3997,33 @@ async function testExplainMetadataTransform() {
     }),
   );
 
-  // wyw 2.3.0 hardcodes `rules: {}` inside `result.metadata`; the populated,
-  // selector-keyed rules live on the top-level transform result. Merge them in
-  // the way a correct manifest producer should, so rule-derived record fields
-  // (selector, cssText) are exercised end to end.
-  const manifest = createDxStylesExplainManifest({ ...metadata, rules: result.rules ?? {} }, {
+  // wyw hardcodes `rules: {}` inside `result.metadata` (through at least
+  // 2.4.1), and the stock @wyw-in-js/vite plugin serializes exactly that
+  // metadata into `.wyw-in-js.json`. Build the manifest the same way, so this
+  // exercises the production shape: rule-derived record fields (selector,
+  // cssText) must be recovered from the processors' "css" artifacts.
+  const manifest = createDxStylesExplainManifest(metadata, {
     cssFile: "src/explain-metadata.wyw-in-js.css",
     source: "src/explain-metadata.ts",
   });
+  assert.deepEqual(Object.keys(manifest.rules), []);
   const explainIndex = createDxStylesExplainIndex(manifest);
   const buttonRecords = explainIndex.get(buttonExplain.entries[0].className);
   assert.ok(buttonRecords);
   assert.equal(buttonRecords.length, 1);
   assert.equal(buttonRecords[0].compose[0].className, sharedExplain.entries[0].className);
   assert.equal(buttonRecords[0].compose[0].symbol, "shared");
+  assert.equal(buttonRecords[0].selector, `.${buttonExplain.entries[0].className}`);
+  assert.equal(buttonRecords[0].cssText, "color:red;background-color:blue;");
 
   const wobbleRecords = explainIndex.get(wobbleEntry.className);
   assert.ok(wobbleRecords);
   assert.equal(wobbleRecords.length, 1);
   assert.equal(wobbleRecords[0].selector, `@keyframes ${wobbleEntry.className}`);
+  assert.equal(
+    wobbleRecords[0].cssText,
+    "from{transform:rotate(-3deg);}to{transform:rotate(3deg);transition-duration:120ms;transition-duration:0.12s;}",
+  );
 }
 
 function testExplainManifestFormatting() {
@@ -4193,6 +4201,119 @@ function testKeyframesExplainFormatting() {
   assert.ok(report.includes("frames: 0%, 100% | 50%"), report);
   assert.ok(report.includes("selector: @keyframes wave_k1"), report);
   assert.ok(report.includes("symbol: wave"), report);
+}
+
+function testExplainIndexRecoversRulesFromCssArtifacts() {
+  // Production manifests written by the stock @wyw-in-js/vite plugin (through
+  // at least 2.4.1) carry `rules: {}` — the selector-keyed rules survive only
+  // inside each processor's ["css", [rules, replacements]] artifact. The
+  // explain index must recover selector/cssText from those artifacts.
+  const manifest = createDxStylesExplainManifest(
+    {
+      dependencies: [],
+      processors: [
+        {
+          artifacts: [
+            [
+              "css",
+              [
+                {
+                  "@keyframes wobble_w1": {
+                    className: "wobble_w1",
+                    cssText: "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
+                    displayName: "wobble",
+                    start: { column: 22, line: 3 },
+                  },
+                },
+                [],
+              ],
+            ],
+            createExplainArtifact([
+              {
+                className: "wobble_w1",
+                composeRefs: [],
+                frames: ["from", "to"],
+                kind: "keyframes",
+                node: "keyframes",
+                preevalClassName: "dxk_test",
+              },
+            ]),
+          ],
+          className: "wobble_w1",
+          displayName: "wobble",
+          start: { column: 22, line: 3 },
+        },
+        {
+          artifacts: [
+            [
+              "css",
+              [
+                {
+                  ".button_b1": {
+                    className: "button_b1",
+                    cssText: "color:red;",
+                    displayName: "button",
+                    start: { column: 22, line: 8 },
+                  },
+                },
+                [],
+              ],
+            ],
+            createExplainArtifact([
+              {
+                className: "button_b1",
+                composeRefs: [],
+                kind: "css",
+                node: "style",
+                preevalClassName: "dxs_test",
+              },
+            ]),
+          ],
+          className: "button_b1",
+          displayName: "button",
+          start: { column: 22, line: 8 },
+        },
+      ],
+      replacements: [],
+      rules: {},
+    },
+    { cssFile: "src/index.wyw-in-js.css", source: "src/index.ts" },
+  );
+
+  const explainIndex = createDxStylesExplainIndex(manifest);
+  const buttonRecords = explainIndex.get("button_b1");
+  const wobbleRecords = explainIndex.get("wobble_w1");
+  assert.ok(buttonRecords);
+  assert.ok(wobbleRecords);
+  assert.equal(buttonRecords[0].selector, ".button_b1");
+  assert.equal(buttonRecords[0].cssText, "color:red;");
+  assert.equal(wobbleRecords[0].selector, "@keyframes wobble_w1");
+  assert.equal(
+    wobbleRecords[0].cssText,
+    "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
+  );
+
+  const report = formatDxStylesExplainReport(manifest, ["wobble_w1"]);
+  assert.ok(report.includes("selector: @keyframes wobble_w1"), report);
+  assert.ok(report.includes("css: from{transform:rotate(-3deg);}"), report);
+
+  // Populated manifest.rules stay authoritative over artifact-derived rules,
+  // so an upstream fix that starts filling them in wins automatically.
+  const overriddenIndex = createDxStylesExplainIndex({
+    ...manifest,
+    rules: {
+      ".button_b1": {
+        className: "button_b1",
+        cssText: "color:blue;",
+        displayName: "button",
+        start: { column: 22, line: 8 },
+      },
+    },
+  });
+  const overriddenRecords = overriddenIndex.get("button_b1");
+  assert.ok(overriddenRecords);
+  assert.equal(overriddenRecords[0].cssText, "color:blue;");
+  assert.equal(overriddenRecords[0].selector, ".button_b1");
 }
 
 function testExplainManifestHandlesAmbiguousComposeRefs() {
@@ -4848,6 +4969,7 @@ async function main() {
   await testExplainMetadataTransform();
   testExplainManifestFormatting();
   testKeyframesExplainFormatting();
+  testExplainIndexRecoversRulesFromCssArtifacts();
   testExplainManifestHandlesAmbiguousComposeRefs();
   await testDiagnosticsTransform();
   await testDiagnosticsDoNotRequireMetadataOutput();
