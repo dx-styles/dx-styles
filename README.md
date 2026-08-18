@@ -97,6 +97,7 @@ Every column is a good library; pick by constraints. Corrections welcome —
 ## Public API
 
 - `css`
+- `keyframes`
 - `recipe`
 - `slotRecipe`
 - `splitRecipeProps`

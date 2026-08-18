@@ -5,6 +5,7 @@
 The authoring API is small:
 
 - `css(...)` for static style objects and composition.
+- `keyframes(...)` for shareable animation names.
 - `recipe(...)` for one-element variant selectors.
 - `slotRecipe(...)` for multipart variant selectors.
 - `splitRecipeProps(...)` and `splitSlotRecipeProps(...)` for variant-driven component props.
@@ -15,6 +16,7 @@ The authoring API is small:
 
 - [Getting started](./getting-started.md)
 - [Authoring styles](./authoring.md)
+- [Keyframes](./keyframes.md)
 - [Recipes](./recipes.md)
 - [Slot recipes](./slot-recipes.md)
 - [Tokens and themes](./tokens-and-themes.md)

@@ -29,7 +29,7 @@ is gone.
 | `styled(Component)` wrapping | The component takes `className`; compose with [`cx(...)`](../authoring.md) |
 | `${OtherComponent}` in selectors | [`slotRecipe(...)`](../slot-recipes.md) for coordinated elements (see below) |
 | `createGlobalStyle` | A plain `.css` file imported once |
-| `keyframes` | `@keyframes` in a plain `.css` file, referenced by name |
+| `keyframes` | [`keyframes(...)`](../keyframes.md) — a deterministic animation name |
 | `.attrs(...)` | Regular JSX props |
 | `ServerStyleSheet` / SSR plumbing | Not needed — CSS is a static asset |
 
@@ -146,5 +146,5 @@ class or data attribute you own: `"&:hover [data-part='icon']": { … }` inside 
 - [ ] No `styled.` factories left; components take `className`.
 - [ ] Finite style branches are recipe variants; unbounded values go through `assignVars`.
 - [ ] Theme values live in a token contract; no `useTheme` for styling.
-- [ ] Global styles and keyframes moved to plain CSS.
+- [ ] Global styles moved to plain CSS; `keyframes` calls ported to [`keyframes(...)`](../keyframes.md).
 - [ ] styled-components, its Babel plugin, and SSR sheet plumbing removed from the bundle.
