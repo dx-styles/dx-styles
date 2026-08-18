@@ -2,6 +2,8 @@ import type {
   ContractShape,
   ContractValues,
   CssClassName,
+  KeyframesConfig,
+  KeyframesName,
   PartialContractValues,
   Recipe,
   RecipeConfig,
@@ -29,6 +31,7 @@ import {
   css as cssRuntime,
   cx,
   getDescriptorClassName,
+  keyframes as keyframesRuntime,
   splitRecipeProps as splitRecipePropsRuntime,
   splitSlotRecipeProps as splitSlotRecipePropsRuntime,
 } from "./internal";
@@ -39,6 +42,9 @@ export type {
   ContractShape,
   ContractValues,
   CssClassName,
+  KeyframeFrame,
+  KeyframesConfig,
+  KeyframesName,
   PartialContractValues,
   Recipe,
   RecipeConfig,
@@ -62,6 +68,16 @@ export { createVar, setVar, varName } from "./internal";
  */
 export function css(...parts: StylePart[]): CssClassName {
   return cssRuntime(...parts);
+}
+
+/**
+ * Declares a shareable @keyframes animation and returns its deterministic name.
+ *
+ * The name is a plain string value: use it as `animationName` or inside an
+ * `animation` shorthand, across files, recipes, and theme values.
+ */
+export function keyframes(frames: KeyframesConfig): KeyframesName {
+  return keyframesRuntime(frames);
 }
 
 /**

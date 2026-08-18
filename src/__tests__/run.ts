@@ -52,6 +52,7 @@ import {
   createTokenContract,
   css,
   cx,
+  keyframes,
   recipe,
   slotRecipe,
   splitRecipeProps,
@@ -1004,6 +1005,113 @@ function testRuntimeHelpers() {
       },
     });
   }, /slotRecipe\(\) compound variant #0 css references unknown slot "body"/u);
+}
+
+function testRuntimeKeyframes() {
+  const name = keyframes({
+    from: { opacity: 0, transform: "rotate(0deg)" },
+    to: { opacity: 1, transform: "rotate(360deg)" },
+  });
+
+  assert.match(name, /^dxk_[0-9a-z]+$/u);
+
+  // Deterministic from content; property order does not matter.
+  assert.equal(
+    keyframes({
+      to: { transform: "rotate(360deg)", opacity: 1 },
+      from: { transform: "rotate(0deg)", opacity: 0 },
+    }),
+    name,
+  );
+  assert.notEqual(keyframes({ from: { opacity: 0 } }), name);
+
+  // Fallback arrays and unitless numbers are ordinary declaration values.
+  assert.match(keyframes({ from: { opacity: [0, "0%"], zIndex: 2 } }), /^dxk_[0-9a-z]+$/u);
+
+  // An animation name is a value, not a class: css() rejects it as a part.
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => css(name),
+    /previously declared css\(\) results/u,
+  );
+
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => keyframes("spin"),
+    /dx-styles keyframes\(\) requires a statically analyzable keyframes object\./u,
+  );
+
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => keyframes({ from: "red" }),
+    /dx-styles keyframes\(\) frame "from" must be a plain style object of declarations\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { "&:hover": { color: "red" } },
+      }),
+    /dx-styles keyframes\(\) frame "from" cannot contain nested selectors \("&:hover"\)\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ $rtl: { transform: "none" } }),
+    /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { $noflip: true },
+      }),
+    /dx-styles keyframes\(\) does not support the \$noflip marker inside frames\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { transform: [{}] },
+      }),
+    /dx-styles keyframes\(\) frame "from" property "transform" cannot use non-primitive array values\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { __dxStyles: { kind: "css" } },
+      }),
+    /dx-styles keyframes\(\) frame "from" must be a plain style object of declarations\./u,
+  );
+
+  // Falsy declaration values are dropped before hashing — part of the name
+  // contract the build-time processor twin must reproduce byte-for-byte.
+  assert.equal(
+    keyframes({ from: { color: undefined, opacity: 0 } }),
+    keyframes({ from: { opacity: 0 } }),
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Intentional: an interpolated object stringifies to "[object Object]", which is exactly what this guard rejects.
+        from: { [`color${String({})}`]: "red" },
+      }),
+    /dx-styles keyframes\(\) key "color\[object Object\]" contains "\[object Object\]"/u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { opacity: true },
+      }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must be a primitive or primitive array\./u,
+  );
 }
 
 function testRuntimeStyleHandles() {
@@ -4240,6 +4348,7 @@ async function testSharedLibraryBuildRemovesArtifactsWhenDxStylesSourceIsDeleted
 
 async function main() {
   testRuntimeHelpers();
+  testRuntimeKeyframes();
   testRuntimeStyleHandles();
   testRecipePropSplitting();
   await testBuiltRootEntryStyleHandles();
