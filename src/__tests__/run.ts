@@ -1832,6 +1832,39 @@ async function testCssTransform() {
   assert.match(result.cssText ?? "", /@media \(width >= 48rem\)\{[^}]*color:black;/u);
 }
 
+async function testFallbackArraySerialization() {
+  // Unit level: arrays expand to repeated declarations in authored order.
+  assert.equal(toCSSStyle({ opacity: [0, "0%"] }), "opacity:0;opacity:0%;");
+  assert.equal(toCSSStyle({ zIndex: [1, 2] }), "z-index:1;z-index:2;");
+  // px formatting applies per item; unitless properties stay unitless.
+  assert.equal(toCSSStyle({ width: [100, "50vw"] }), "width:100px;width:50vw;");
+  // Empty arrays emit nothing.
+  assert.equal(toCSSStyle({ opacity: [], color: "red" }), "color:red;");
+
+  // Transform level: both css() rules and keyframes frames keep the fallbacks.
+  const result = await runWywTransform(
+    `
+      import { css, keyframes } from "dx-styles";
+
+      export const fade = keyframes({
+        from: { opacity: [0, "0%"] },
+        to: { opacity: [1, "100%"] },
+      });
+
+      export const layer = css({
+        width: ["100px", "50vw"],
+        animationName: fade,
+      });
+    `,
+    "fallback-arrays.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  assert.ok(cssText.includes("opacity:0;opacity:0%;"), cssText);
+  assert.ok(cssText.includes("opacity:1;opacity:100%;"), cssText);
+  assert.ok(cssText.includes("width:100px;width:50vw;"), cssText);
+}
+
 async function testCssTransformComposesPublicStyleHandles() {
   const handle = createStyleHandle("public_button_root");
 
@@ -4506,6 +4539,7 @@ async function main() {
   testPackageExports();
   await testPackageExportConditionResolution();
   await testCssTransform();
+  await testFallbackArraySerialization();
   await testCssTransformComposesPublicStyleHandles();
   await testCssTransformRejectsNestedStyleHandles();
   await testCssTransformRejectsClassValuesInSelectorKeys();

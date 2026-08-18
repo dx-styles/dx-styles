@@ -132,6 +132,20 @@ export function toCSS(value: CssSerializableValue): string {
         return `${hyphenateCssProperty(property)}:${formatCssPropertyValue(property, entry)};`;
       }
 
+      if (Array.isArray(entry)) {
+        return entry
+          .map((item) => {
+            if (typeof item !== "number" && typeof item !== "string") {
+              throw new Error(
+                `dx-styles style property "${property}" cannot use non-primitive array values.`,
+              );
+            }
+
+            return `${hyphenateCssProperty(property)}:${formatCssPropertyValue(property, item)};`;
+          })
+          .join("");
+      }
+
       return `${property}{${toCSS(entry)}}`;
     })
     .join("");
