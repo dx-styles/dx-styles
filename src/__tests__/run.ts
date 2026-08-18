@@ -2533,6 +2533,8 @@ async function testKeyframesTransform() {
   assert.ok(cssText.includes(`animation-name:${name}`), cssText);
   // The name is never treated as a class.
   assert.equal(cssText.includes(`.${name}`), false, cssText);
+  // Frame declarations serialize with their values, not just the frame shells.
+  assert.ok(cssText.includes("transform:rotate(360deg)"), cssText);
 }
 
 async function testKeyframesTransformRejectsInvalidConfigs() {
@@ -2594,6 +2596,50 @@ async function testKeyframesTransformRejectsInvalidConfigs() {
       ),
     /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
   );
+}
+
+async function testKeyframesUsageSurfaces() {
+  const result = await runWywTransform(
+    `
+      import { createTokenContract, keyframes, recipe } from "dx-styles";
+
+      const tokens = createTokenContract(
+        { motion: { distance: null } },
+        { prefix: "kf-usage" },
+      );
+
+      export const slide = keyframes({
+        "0%": { insetInlineStart: 0, opacity: 0.4 },
+        "100%": { insetInlineStart: tokens.motion.distance, opacity: 1 },
+      });
+
+      export const badge = recipe({
+        base: { display: "inline-flex" },
+        variants: {
+          motion: {
+            sliding: { animation: \`\${slide} 2s ease-in-out infinite\` },
+          },
+        },
+      });
+    `,
+    "keyframes-usage.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  const nameMatch = /@keyframes (slide_[^{\s]+)\{/u.exec(cssText);
+  assert.ok(nameMatch, cssText);
+  const name = nameMatch[1];
+
+  // Token references land inside frames as var() values.
+  assert.ok(cssText.includes("inset-inline-start:var(--kf-usage-motion-distance)"), cssText);
+  // Percentage frame keys pass through verbatim; unitless numbers formatted as usual.
+  assert.ok(cssText.includes("0%{inset-inline-start:0;opacity:0.4;}"), cssText);
+  // The recipe variant rule references the same deterministic name.
+  assert.ok(cssText.includes(`animation:${name} 2s ease-in-out infinite`), cssText);
+  // Recipe-generated selectors carry a content hash between the display name and the
+  // segment (see testRecipeTransformMinifiesClassNames), so pin the segment suffix
+  // rather than a literal "badge__motion-sliding".
+  assert.match(cssText, /\.badge_[^_{\s]+__motion-sliding\{/u);
 }
 
 async function testCreateTokenContractTransform() {
@@ -4556,6 +4602,7 @@ async function main() {
   await testCreateVarCrossFileStaticTransform();
   await testKeyframesTransform();
   await testKeyframesTransformRejectsInvalidConfigs();
+  await testKeyframesUsageSurfaces();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
