@@ -23,6 +23,16 @@ const projectRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const probeFileName = join(projectRoot, "__completions_probe__.ts");
 const MARKER = "/*|*/";
 
+// TypeScript normalizes root file names to forward slashes before calling the
+// host, while path.join emits backslashes on Windows — a strict string
+// comparison would silently drop the virtual probe from the program there.
+function isProbePath(fileName: string): boolean {
+  return (
+    fileName.replaceAll("\\", "/").toLowerCase() ===
+    probeFileName.replaceAll("\\", "/").toLowerCase()
+  );
+}
+
 const IMPORTS = `import { css, recipe, slotRecipe } from "./src/index";\n`;
 
 const compilerOptions: ts.CompilerOptions = {
@@ -47,7 +57,7 @@ const host: ts.LanguageServiceHost = {
   getDirectories: (directoryName) => ts.sys.getDirectories(directoryName),
   getScriptFileNames: () => [probeFileName],
   getScriptSnapshot: (fileName) => {
-    if (fileName === probeFileName) {
+    if (isProbePath(fileName)) {
       return ts.ScriptSnapshot.fromString(probeText);
     }
 
@@ -56,7 +66,7 @@ const host: ts.LanguageServiceHost = {
       : undefined;
   },
   getScriptVersion: (fileName) =>
-    fileName === probeFileName ? String(probeVersion) : "1",
+    isProbePath(fileName) ? String(probeVersion) : "1",
   readDirectory: (path, extensions, exclude, include, depth) =>
     ts.sys.readDirectory(path, extensions, exclude, include, depth),
   readFile: (path, encoding) => ts.sys.readFile(path, encoding),
