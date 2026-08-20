@@ -564,6 +564,20 @@ function assertValidKeyframeKey(key: string): void {
   }
 }
 
+function assertFiniteKeyframeValue(
+  frame: string,
+  property: string,
+  value: StyleLeafValue,
+): void {
+  const values = Array.isArray(value) ? value : [value];
+
+  if (values.some((entry) => typeof entry === "number" && !Number.isFinite(entry))) {
+    throw new Error(
+      `dx-styles keyframes() frame "${frame}" property "${property}" must use finite numbers.`,
+    );
+  }
+}
+
 function expectKeyframesFrames(
   value: unknown,
 ): Record<string, Record<string, StyleLeafValue>> {
@@ -608,6 +622,8 @@ function expectKeyframesFrames(
               `dx-styles keyframes() frame "${frame}" property "${property}" must be a primitive or primitive array.`,
             );
           }
+
+          assertFiniteKeyframeValue(frame, property, propertyValue);
 
           return {
             ...acc,

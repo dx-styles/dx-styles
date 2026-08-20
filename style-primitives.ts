@@ -546,6 +546,20 @@ function assertValidKeyframeKey(key: string): void {
   }
 }
 
+function assertFiniteKeyframeValue(
+  frame: string,
+  property: string,
+  value: readonly StylePrimitive[] | StylePrimitive,
+): void {
+  const values = Array.isArray(value) ? value : [value];
+
+  if (values.some((entry) => typeof entry === "number" && !Number.isFinite(entry))) {
+    throw new Error(
+      `dx-styles keyframes() frame "${frame}" property "${property}" must use finite numbers.`,
+    );
+  }
+}
+
 // Build-time twin of `expectKeyframesFrames` in src/internal.ts: same branch
 // order, byte-identical error messages, so extracted and runtime-fallback
 // validation behave identically. (src/ cannot import this module under
@@ -593,6 +607,8 @@ export function expectKeyframesConfig(value: unknown): KeyframesFrames {
           `dx-styles keyframes() frame "${frame}" property "${property}" must be a primitive or primitive array.`,
         );
       }
+
+      assertFiniteKeyframeValue(frame, property, propertyValue);
 
       setRecordEntry(
         declarations,

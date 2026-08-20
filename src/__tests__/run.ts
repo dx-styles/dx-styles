@@ -65,6 +65,7 @@ import {
   STYLE_HANDLE_DESCRIPTOR_KIND,
 } from "../internal";
 import { createRuntimeRecipe } from "../runtime";
+import { keyframes as testSupportKeyframes } from "../test-support";
 
 interface PreevalRuntimeModule {
   readonly preevalCss: (...parts: readonly unknown[]) => unknown;
@@ -1025,6 +1026,13 @@ function testRuntimeKeyframes() {
     name,
   );
   assert.notEqual(keyframes({ from: { opacity: 0 } }), name);
+  assert.equal(
+    testSupportKeyframes({
+      from: { opacity: 0, transform: "rotate(0deg)" },
+      to: { opacity: 1, transform: "rotate(360deg)" },
+    }),
+    name,
+  );
 
   // Fallback arrays and unitless numbers are ordinary declaration values.
   assert.match(keyframes({ from: { opacity: [0, "0%"], zIndex: 2 } }), /^dxk_[0-9a-z]+$/u);
@@ -1112,6 +1120,16 @@ function testRuntimeKeyframes() {
         from: { opacity: true },
       }),
     /dx-styles keyframes\(\) frame "from" property "opacity" must be a primitive or primitive array\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ from: { opacity: Number.NaN } }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ from: { opacity: [0, Number.POSITIVE_INFINITY] } }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
   );
 }
 
@@ -2595,6 +2613,21 @@ async function testKeyframesTransformRejectsInvalidConfigs() {
         "keyframes-invalid-rtl.ts",
       ),
     /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            from: { opacity: NaN },
+          });
+        `,
+        "keyframes-invalid-non-finite.ts",
+      ),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
   );
 }
 
