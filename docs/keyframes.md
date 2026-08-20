@@ -63,8 +63,8 @@ export const octocat = css({
 ```
 
 To declare an inline `@keyframes` under a global (unscoped) name, put `:global(...)` on the
-declaration key and reference it with the plain name — a global declaration is excluded from
-scoping, so the plain reference is left alone:
+declaration key. References may use the plain name or `:global(...)`; both emit the raw global
+name:
 
 ```ts
 export const wave = css({
@@ -76,18 +76,12 @@ export const wave = css({
 });
 ```
 
-Name collisions become your responsibility, as in plain CSS. Do not use `:global(...)` inside
-`animation`/`animationName` **values** — it is not unwrapped there and ships invalid CSS
-(a compiler parsing quirk, pinned by tests).
+Name collisions become your responsibility, as in plain CSS.
 
 ## Eval strategies
 
-With the default transform strategy, the compiled consumer of an imported animation keeps a bare
-`import "./motion";` — that import is what carries the declaring module's `@keyframes` rule into
-your bundle. Under a forced `eval: { strategy: "execute" }` the import is inlined away: if the
-declaring module has no other importers, its `@keyframes` rule silently drops out of the CSS and
-the animation never runs. If you force the execute strategy, anchor the declaring module with a
-bare side-effect import:
+The compiled consumer of an imported animation keeps a bare `import "./motion";` — that import is
+what carries the declaring module's `@keyframes` rule into your bundle.
 
 ```ts
 import "./motion"; // keeps the @keyframes rule in the bundle
@@ -97,4 +91,4 @@ export const spinner = css({ animationName: spin });
 ```
 
 Same-file usage and runtime-position usage (`<div style={{ animationName: spin }} />`) are
-unaffected in every strategy.
+unaffected.
