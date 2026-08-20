@@ -2737,9 +2737,9 @@ async function testKeyframesCrossFileStaticTransform() {
     // the bundler graph so its @keyframes rule ships with the app CSS.
     assert.ok(entryResult.code.includes('import "./motion";'), entryResult.code);
 
-    // Forcing full evaluation inlines the name and strips the import (engine
-    // behavior); the emitted CSS and the embedded animation name stay
-    // byte-identical across strategies.
+    // Forcing full evaluation inlines the name. The engine may still keep the
+    // declaring module as a side-effect import; the emitted CSS and the
+    // embedded animation name stay byte-identical across strategies.
     const executeResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
       evalStrategy: "execute",
     });
@@ -2748,7 +2748,7 @@ async function testKeyframesCrossFileStaticTransform() {
       (executeResult.cssText ?? "").includes(`animation-name:${declaredName}`),
       executeResult.cssText ?? "",
     );
-    assert.equal(executeResult.code.includes("./motion"), false, executeResult.code);
+    assert.equal(executeResult.code.includes("import { spin }"), false, executeResult.code);
     assert.ok(executeResult.code.includes(`animation-name`) === false, executeResult.code);
 
     const embeddedName = (code: string) =>
@@ -2822,21 +2822,11 @@ async function testCssInlineKeyframesScoping() {
   // under the raw name "wave" (no suffix, no ":global(" wrapper).
   assert.ok(cssText.includes("@keyframes wave{"), cssText);
 
-  // But the same-rule "animation" shorthand reference is NOT unwrapped here,
-  // and is not vendor-prefixed either — verified directly against
-  // @wyw-in-js/transform's stylis pipeline in isolation (independent of any
-  // dx-styles code). Root cause: dx-styles serializes declarations as
-  // "prop:value" with no space, so the value ":global(wave) 2s infinite"
-  // lands immediately after the property colon, producing "animation::global(...)".
-  // Stylis's own parser then folds that second colon into the *property name*
-  // itself (element.props becomes the string "animation:", not "animation"),
-  // which makes the keyframe-suffixer plugin's `animationPropsSet.has(props)`
-  // check miss entirely — so it skips both the vendor-prefix duplication and
-  // the :global() unwrap/rewrite for this declaration. The ":global(wave)"
-  // text therefore survives verbatim in the emitted CSS.
-  assert.ok(cssText.includes("animation::global(wave) 2s infinite;"), cssText);
-  assert.equal(cssText.includes("-webkit-animation::global(wave)"), false, cssText);
-  assert.ok(cssText.includes(":global(wave)"), cssText);
+  // The same-rule "animation" shorthand reference is unwrapped to the raw
+  // global name and gets vendor prefixes like any other animation declaration.
+  assert.ok(cssText.includes("animation:wave 2s infinite;"), cssText);
+  assert.ok(cssText.includes("-webkit-animation:wave 2s infinite;"), cssText);
+  assert.equal(cssText.includes(":global(wave)"), false, cssText);
 
   // The documented global pattern works end to end: the rule emits under the
   // raw name, and the plain-name reference stays untouched and gets vendor
@@ -4030,16 +4020,14 @@ async function testExplainMetadataTransform() {
     }),
   );
 
-  // wyw hardcodes `rules: {}` inside `result.metadata` (through at least
-  // 2.4.1), and the stock @wyw-in-js/vite plugin serializes exactly that
-  // metadata into `.wyw-in-js.json`. Build the manifest the same way, so this
-  // exercises the production shape: rule-derived record fields (selector,
-  // cssText) must be recovered from the processors' "css" artifacts.
+  // WyW includes rule metadata in the production `.wyw-in-js.json` shape, so
+  // selector/cssText records are available without recovering them from the
+  // processors' "css" artifacts.
   const manifest = createDxStylesExplainManifest(metadata, {
     cssFile: "src/explain-metadata.wyw-in-js.css",
     source: "src/explain-metadata.ts",
   });
-  assert.deepEqual(Object.keys(manifest.rules), []);
+  assert.ok(Object.keys(manifest.rules).length > 0, JSON.stringify(manifest.rules));
   const explainIndex = createDxStylesExplainIndex(manifest);
   const buttonRecords = explainIndex.get(buttonExplain.entries[0].className);
   assert.ok(buttonRecords);
@@ -4234,119 +4222,6 @@ function testKeyframesExplainFormatting() {
   assert.ok(report.includes("frames: 0%, 100% | 50%"), report);
   assert.ok(report.includes("selector: @keyframes wave_k1"), report);
   assert.ok(report.includes("symbol: wave"), report);
-}
-
-function testExplainIndexRecoversRulesFromCssArtifacts() {
-  // Production manifests written by the stock @wyw-in-js/vite plugin (through
-  // at least 2.4.1) carry `rules: {}` — the selector-keyed rules survive only
-  // inside each processor's ["css", [rules, replacements]] artifact. The
-  // explain index must recover selector/cssText from those artifacts.
-  const manifest = createDxStylesExplainManifest(
-    {
-      dependencies: [],
-      processors: [
-        {
-          artifacts: [
-            [
-              "css",
-              [
-                {
-                  "@keyframes wobble_w1": {
-                    className: "wobble_w1",
-                    cssText: "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
-                    displayName: "wobble",
-                    start: { column: 22, line: 3 },
-                  },
-                },
-                [],
-              ],
-            ],
-            createExplainArtifact([
-              {
-                className: "wobble_w1",
-                composeRefs: [],
-                frames: ["from", "to"],
-                kind: "keyframes",
-                node: "keyframes",
-                preevalClassName: "dxk_test",
-              },
-            ]),
-          ],
-          className: "wobble_w1",
-          displayName: "wobble",
-          start: { column: 22, line: 3 },
-        },
-        {
-          artifacts: [
-            [
-              "css",
-              [
-                {
-                  ".button_b1": {
-                    className: "button_b1",
-                    cssText: "color:red;",
-                    displayName: "button",
-                    start: { column: 22, line: 8 },
-                  },
-                },
-                [],
-              ],
-            ],
-            createExplainArtifact([
-              {
-                className: "button_b1",
-                composeRefs: [],
-                kind: "css",
-                node: "style",
-                preevalClassName: "dxs_test",
-              },
-            ]),
-          ],
-          className: "button_b1",
-          displayName: "button",
-          start: { column: 22, line: 8 },
-        },
-      ],
-      replacements: [],
-      rules: {},
-    },
-    { cssFile: "src/index.wyw-in-js.css", source: "src/index.ts" },
-  );
-
-  const explainIndex = createDxStylesExplainIndex(manifest);
-  const buttonRecords = explainIndex.get("button_b1");
-  const wobbleRecords = explainIndex.get("wobble_w1");
-  assert.ok(buttonRecords);
-  assert.ok(wobbleRecords);
-  assert.equal(buttonRecords[0].selector, ".button_b1");
-  assert.equal(buttonRecords[0].cssText, "color:red;");
-  assert.equal(wobbleRecords[0].selector, "@keyframes wobble_w1");
-  assert.equal(
-    wobbleRecords[0].cssText,
-    "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
-  );
-
-  const report = formatDxStylesExplainReport(manifest, ["wobble_w1"]);
-  assert.ok(report.includes("selector: @keyframes wobble_w1"), report);
-  assert.ok(report.includes("css: from{transform:rotate(-3deg);}"), report);
-
-  // Populated manifest.rules stay authoritative over artifact-derived rules,
-  // so an upstream fix that starts filling them in wins automatically.
-  const overriddenIndex = createDxStylesExplainIndex({
-    ...manifest,
-    rules: {
-      ".button_b1": {
-        className: "button_b1",
-        cssText: "color:blue;",
-        displayName: "button",
-        start: { column: 22, line: 8 },
-      },
-    },
-  });
-  const overriddenRecords = overriddenIndex.get("button_b1");
-  assert.ok(overriddenRecords);
-  assert.equal(overriddenRecords[0].cssText, "color:blue;");
-  assert.equal(overriddenRecords[0].selector, ".button_b1");
 }
 
 function testExplainManifestHandlesAmbiguousComposeRefs() {
@@ -5002,7 +4877,6 @@ async function main() {
   await testExplainMetadataTransform();
   testExplainManifestFormatting();
   testKeyframesExplainFormatting();
-  testExplainIndexRecoversRulesFromCssArtifacts();
   testExplainManifestHandlesAmbiguousComposeRefs();
   await testDiagnosticsTransform();
   await testDiagnosticsDoNotRequireMetadataOutput();
