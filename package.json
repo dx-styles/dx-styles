@@ -1,6 +1,6 @@
 {
   "name": "dx-styles",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": false,
   "description": "Compiler-backed CSS-in-TS for zero-runtime, deterministic styling in design systems.",
   "type": "module",

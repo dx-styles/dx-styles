@@ -1,5 +1,83 @@
 # dx-styles
 
+## 1.4.0
+
+### Minor Changes
+
+- [#29](https://github.com/dx-styles/dx-styles/pull/29) [`1c966dd`](https://github.com/dx-styles/dx-styles/commit/1c966dd197600f33f6af48de63fe32ab2e94579b) Thanks [@BarkovskiyMaxim](https://github.com/BarkovskiyMaxim)! - Add `keyframes()` — deterministic animation names extracted at build time
+
+  `keyframes(frames)` declares a shareable animation and returns its name as a plain string: use it
+  as `animationName`, inside an `animation` shorthand, across files, in `recipe()` variants, and in
+  theme values. The frames are extracted into a static `@keyframes` rule at build time; the name
+  follows the same deterministic generation as `css()` class names. Frames accept declarations only
+  (token contract references included); nested selectors and `$rtl`/`$noflip` markers fail the build
+  with pointed errors.
+
+  The previously undocumented inline form — a `"@keyframes name"` block nested in `css()` — is now
+  documented and covered by tests: the compiler scopes the name per rule and rewrites same-rule
+  `animation` references, with `:global(...)` on the declaration key as the unscoped escape hatch.
+  Cross-rule references to inline names dangle silently, which is exactly what `keyframes()` is for.
+  See `docs/keyframes.md`, including the eval-strategy note for forced-`execute` setups.
+
+  Also fixed in passing: primitive fallback arrays (`opacity: [0, "0%"]`) now serialize as repeated
+  declarations in both `css()` rules and keyframes frames — previously they were silently dropped
+  from the emitted CSS. Class and animation names are unchanged.
+
+- [#27](https://github.com/dx-styles/dx-styles/pull/27) [`ad66d89`](https://github.com/dx-styles/dx-styles/commit/ad66d89c648c3128a5b7abcf1e8545553381a35d) Thanks [@Anber](https://github.com/Anber)! - Type style objects with `csstype` so editors complete CSS properties and values
+
+  Inside `css({ ... })` editors offered the 49 members of `String` — `charAt`,
+  `toLowerCase`, even `blink` and `fontcolor` — and not a single CSS property
+  ([#26](https://github.com/dx-styles/dx-styles/issues/26)). Two causes:
+  `StyleObject` was a bare string index signature with no known keys, and
+  `CssClassName` was a `string & { brand }` intersection. An intersection is an
+  object type, so TypeScript pulled in the whole `String` apparent type wherever
+  `StylePart` contextually typed an object literal — `css()`, `recipe()` base and
+  variant values, and `slotRecipe()` slots alike.
+
+  `StyleObject` now builds on `csstype`'s `PropertiesFallback`, and `CssClassName`
+  is a `` `dxs_${string}` `` template literal — a plain string subtype that
+  contributes no completions while still rejecting arbitrary class-name strings,
+  which `resolveStylePart` throws on at runtime.
+
+  Style objects stay just as open as before: custom properties, nested selectors,
+  at-rules, fallback value arrays, and properties `csstype` does not know yet all
+  still typecheck through the index signature. The `$rtl` and `$noflip` markers
+  are now declared, so editors complete them too.
+
+  Three type-level changes can surface code that already failed at runtime, or
+  that leaned on the previous looseness:
+  - `$rtl`/`$noflip` set to anything but `true` (the runtime threw on this).
+  - A boolean value on a real CSS property (the runtime threw on this too).
+  - Assigning a plain `string` to `CssClassName`; it now needs a value that a
+    `css()`, `recipe()`, or `slotRecipe()` call produced.
+
+  One more consequence is worth knowing about. `StyleObject` used to declare no
+  properties at all, which exempted it from TypeScript's weak-type check. Now that
+  it has the CSS properties, passing a `StyleObject` where a slot map
+  (`Partial<Record<TSlot, StylePart>>`) is expected reports "no properties in
+  common" instead of silently passing. That shows up in helpers typed to return
+  `StyleObject` while actually returning a slot map; making such a helper generic
+  over its value type both fixes the error and keeps the real shape:
+
+  ```ts
+  function createVariants<
+    const T extends readonly string[],
+    TStyle = StyleObject,
+  >(
+    options: T,
+    styles: (option: T[number]) => TStyle,
+  ): Record<T[number], TStyle>;
+  ```
+
+### Patch Changes
+
+- [#31](https://github.com/dx-styles/dx-styles/pull/31) [`7e2ff15`](https://github.com/dx-styles/dx-styles/commit/7e2ff15b44867ce79aa65c83b8c7664e6dc937c8) Thanks [@Anber](https://github.com/Anber)! - Update WyW dependencies to the latest 2.4.x releases and refresh starter example locks so their npm audits pass.
+
+  The newer WyW transform also removes a few recently documented engine workarounds: inline
+  `:global(...)` animation values now emit valid global animation references, forced `execute`
+  transforms keep the side-effect import that carries cross-file `@keyframes` CSS, and explain
+  metadata now carries rule records directly.
+
 ## 1.3.0
 
 ### Minor Changes
