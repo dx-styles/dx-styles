@@ -528,3 +528,96 @@ export function buildTokenContract(
 
   return buildContractObject(shape, prefix, []);
 }
+
+export type KeyframesFrames = Record<
+  string,
+  Record<string, readonly StylePrimitive[] | StylePrimitive>
+>;
+
+function assertValidKeyframeKey(key: string): void {
+  if (key === "$rtl" || key === "$noflip") {
+    throw new Error(`dx-styles keyframes() does not support the ${key} marker inside frames.`);
+  }
+
+  if (key.includes("[object Object]")) {
+    throw new Error(
+      `dx-styles keyframes() key "${key}" contains "[object Object]"; class values cannot be interpolated into keyframe keys.`,
+    );
+  }
+}
+
+function assertFiniteKeyframeValue(
+  frame: string,
+  property: string,
+  value: readonly StylePrimitive[] | StylePrimitive,
+): void {
+  const values = Array.isArray(value) ? value : [value];
+
+  if (values.some((entry) => typeof entry === "number" && !Number.isFinite(entry))) {
+    throw new Error(
+      `dx-styles keyframes() frame "${frame}" property "${property}" must use finite numbers.`,
+    );
+  }
+}
+
+// Build-time twin of `expectKeyframesFrames` in src/internal.ts: same branch
+// order, byte-identical error messages, so extracted and runtime-fallback
+// validation behave identically. (src/ cannot import this module under
+// tsconfig.lib's rootDir — the same constraint that keeps
+// `buildTokenContract` twinned.)
+export function expectKeyframesConfig(value: unknown): KeyframesFrames {
+  if (!isPlainObject(value) || hasDxStylesDescriptorKey(value)) {
+    throw new Error("dx-styles keyframes() requires a statically analyzable keyframes object.");
+  }
+
+  const frames: KeyframesFrames = {};
+
+  return Object.entries(value).reduce((acc, [frame, frameValue]) => {
+    assertValidKeyframeKey(frame);
+
+    if (!isPlainObject(frameValue) || hasDxStylesDescriptorKey(frameValue)) {
+      throw new Error(
+        `dx-styles keyframes() frame "${frame}" must be a plain style object of declarations.`,
+      );
+    }
+
+    const declarations: Record<string, readonly StylePrimitive[] | StylePrimitive> = {};
+
+    Object.entries(frameValue).forEach(([property, propertyValue]) => {
+      assertValidKeyframeKey(property);
+
+      if (propertyValue === undefined || propertyValue === null || propertyValue === false) {
+        return;
+      }
+
+      if (isPlainObject(propertyValue)) {
+        throw new Error(
+          `dx-styles keyframes() frame "${frame}" cannot contain nested selectors ("${property}").`,
+        );
+      }
+
+      if (Array.isArray(propertyValue) && !isStyleLeafArray(propertyValue)) {
+        throw new Error(
+          `dx-styles keyframes() frame "${frame}" property "${property}" cannot use non-primitive array values.`,
+        );
+      }
+
+      if (!isStylePrimitive(propertyValue) && !isStyleLeafArray(propertyValue)) {
+        throw new Error(
+          `dx-styles keyframes() frame "${frame}" property "${property}" must be a primitive or primitive array.`,
+        );
+      }
+
+      assertFiniteKeyframeValue(frame, property, propertyValue);
+
+      setRecordEntry(
+        declarations,
+        property,
+        isStyleLeafArray(propertyValue) ? [...propertyValue] : propertyValue,
+      );
+    });
+
+    setRecordEntry(acc, frame, declarations);
+    return acc;
+  }, frames);
+}

@@ -807,6 +807,25 @@ export function ruleForSelector(
   };
 }
 
+// The `@keyframes ${name}` key is used verbatim by the extractor, so the rule
+// compiles as a top-level at-rule instead of a class selector. `className`
+// still names the animation for source maps and the explain index.
+export function ruleForKeyframes(
+  name: string,
+  displayName: string,
+  cssText: string,
+  location: SourceLocation | null,
+): Record<string, ICSSRule> {
+  return {
+    [`@keyframes ${name}`]: {
+      className: name,
+      cssText,
+      displayName,
+      start: location?.start,
+    },
+  };
+}
+
 function expectCompoundVariantEntry(
   entry: LooseCompoundVariant,
   componentName: "recipe" | "slotRecipe",

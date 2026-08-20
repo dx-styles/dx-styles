@@ -33,6 +33,7 @@ import {
 import { findDxStylesExplainPayload } from "../../processors/explain-schema.ts";
 import { createValueNode } from "../../processors/serialization.ts";
 import {
+  createExplainArtifact,
   createRecipeRuntimeDefinition,
   createSlotRecipeRuntimeDefinition,
   toCSSStyle,
@@ -52,6 +53,7 @@ import {
   createTokenContract,
   css,
   cx,
+  keyframes,
   recipe,
   slotRecipe,
   splitRecipeProps,
@@ -63,6 +65,7 @@ import {
   STYLE_HANDLE_DESCRIPTOR_KIND,
 } from "../internal";
 import { createRuntimeRecipe } from "../runtime";
+import { keyframes as testSupportKeyframes } from "../test-support";
 
 interface PreevalRuntimeModule {
   readonly preevalCss: (...parts: readonly unknown[]) => unknown;
@@ -1006,6 +1009,130 @@ function testRuntimeHelpers() {
   }, /slotRecipe\(\) compound variant #0 css references unknown slot "body"/u);
 }
 
+function testRuntimeKeyframes() {
+  const name = keyframes({
+    from: { opacity: 0, transform: "rotate(0deg)" },
+    to: { opacity: 1, transform: "rotate(360deg)" },
+  });
+
+  assert.match(name, /^dxk_[0-9a-z]+$/u);
+
+  // Deterministic from content; property order does not matter.
+  assert.equal(
+    keyframes({
+      to: { transform: "rotate(360deg)", opacity: 1 },
+      from: { transform: "rotate(0deg)", opacity: 0 },
+    }),
+    name,
+  );
+  assert.notEqual(keyframes({ from: { opacity: 0 } }), name);
+  assert.equal(
+    testSupportKeyframes({
+      from: { opacity: 0, transform: "rotate(0deg)" },
+      to: { opacity: 1, transform: "rotate(360deg)" },
+    }),
+    name,
+  );
+
+  // Fallback arrays and unitless numbers are ordinary declaration values.
+  assert.match(keyframes({ from: { opacity: [0, "0%"], zIndex: 2 } }), /^dxk_[0-9a-z]+$/u);
+
+  // An animation name is a value, not a class: css() rejects it as a part.
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => css(name),
+    /previously declared css\(\) results/u,
+  );
+
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => keyframes("spin"),
+    /dx-styles keyframes\(\) requires a statically analyzable keyframes object\./u,
+  );
+
+  assert.throws(
+    // @ts-expect-error Intentional runtime validation check.
+    () => keyframes({ from: "red" }),
+    /dx-styles keyframes\(\) frame "from" must be a plain style object of declarations\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { "&:hover": { color: "red" } },
+      }),
+    /dx-styles keyframes\(\) frame "from" cannot contain nested selectors \("&:hover"\)\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ $rtl: { transform: "none" } }),
+    /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { $noflip: true },
+      }),
+    /dx-styles keyframes\(\) does not support the \$noflip marker inside frames\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { transform: [{}] },
+      }),
+    /dx-styles keyframes\(\) frame "from" property "transform" cannot use non-primitive array values\./u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { __dxStyles: { kind: "css" } },
+      }),
+    /dx-styles keyframes\(\) frame "from" must be a plain style object of declarations\./u,
+  );
+
+  // Falsy declaration values are dropped before hashing — part of the name
+  // contract the build-time processor twin must reproduce byte-for-byte.
+  assert.equal(
+    keyframes({ from: { color: undefined, opacity: 0 } }),
+    keyframes({ from: { opacity: 0 } }),
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Intentional: an interpolated object stringifies to "[object Object]", which is exactly what this guard rejects.
+        from: { [`color${String({})}`]: "red" },
+      }),
+    /dx-styles keyframes\(\) key "color\[object Object\]" contains "\[object Object\]"/u,
+  );
+
+  assert.throws(
+    () =>
+      keyframes({
+        // @ts-expect-error Intentional runtime validation check.
+        from: { opacity: true },
+      }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must be a primitive or primitive array\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ from: { opacity: Number.NaN } }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
+  );
+
+  assert.throws(
+    () => keyframes({ from: { opacity: [0, Number.POSITIVE_INFINITY] } }),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
+  );
+}
+
 function testRuntimeStyleHandles() {
   const button = recipe({
     base: {
@@ -1723,6 +1850,39 @@ async function testCssTransform() {
   assert.match(result.cssText ?? "", /@media \(width >= 48rem\)\{[^}]*color:black;/u);
 }
 
+async function testFallbackArraySerialization() {
+  // Unit level: arrays expand to repeated declarations in authored order.
+  assert.equal(toCSSStyle({ opacity: [0, "0%"] }), "opacity:0;opacity:0%;");
+  assert.equal(toCSSStyle({ zIndex: [1, 2] }), "z-index:1;z-index:2;");
+  // px formatting applies per item; unitless properties stay unitless.
+  assert.equal(toCSSStyle({ width: [100, "50vw"] }), "width:100px;width:50vw;");
+  // Empty arrays emit nothing.
+  assert.equal(toCSSStyle({ opacity: [], color: "red" }), "color:red;");
+
+  // Transform level: both css() rules and keyframes frames keep the fallbacks.
+  const result = await runWywTransform(
+    `
+      import { css, keyframes } from "dx-styles";
+
+      export const fade = keyframes({
+        from: { opacity: [0, "0%"] },
+        to: { opacity: [1, "100%"] },
+      });
+
+      export const layer = css({
+        width: ["100px", "50vw"],
+        animationName: fade,
+      });
+    `,
+    "fallback-arrays.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  assert.ok(cssText.includes("opacity:0;opacity:0%;"), cssText);
+  assert.ok(cssText.includes("opacity:1;opacity:100%;"), cssText);
+  assert.ok(cssText.includes("width:100px;width:50vw;"), cssText);
+}
+
 async function testCssTransformComposesPublicStyleHandles() {
   const handle = createStyleHandle("public_button_root");
 
@@ -2356,6 +2516,335 @@ async function testCreateVarCrossFileStaticTransform() {
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
+}
+
+async function testKeyframesTransform() {
+  const result = await runWywTransform(
+    `
+      import { css, keyframes } from "dx-styles";
+
+      export const spin = keyframes({
+        from: { transform: "rotate(0deg)" },
+        to: { transform: "rotate(360deg)" },
+      });
+
+      export const spinner = css({
+        animation: \`\${spin} 1s linear infinite\`,
+      });
+
+      export const label = css({
+        animationName: spin,
+      });
+    `,
+    "keyframes-basic.ts",
+  );
+
+  const nameMatch = /export const spin = "(spin_[^"\s]+)";/u.exec(result.code);
+  assert.ok(nameMatch, result.code);
+  const name = nameMatch[1];
+  const cssText = result.cssText ?? "";
+
+  // The rule is emitted top-level under the same deterministic name.
+  assert.ok(cssText.includes(`@keyframes ${name}{from{`), cssText);
+  // References embed the very same name as plain values.
+  assert.ok(cssText.includes(`animation:${name} 1s linear infinite`), cssText);
+  assert.ok(cssText.includes(`animation-name:${name}`), cssText);
+  // The name is never treated as a class.
+  assert.equal(cssText.includes(`.${name}`), false, cssText);
+  // Frame declarations serialize with their values, not just the frame shells.
+  assert.ok(cssText.includes("transform:rotate(360deg)"), cssText);
+}
+
+async function testKeyframesTransformRejectsInvalidConfigs() {
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes("spin");
+        `,
+        "keyframes-invalid-string.ts",
+      ),
+    /dx-styles keyframes\(\) requires a statically analyzable keyframes object\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes(
+            { from: { opacity: 0 } },
+            { to: { opacity: 1 } },
+          );
+        `,
+        "keyframes-invalid-arity.ts",
+      ),
+    /dx-styles keyframes\(\) takes exactly one keyframes object\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            from: { "&:hover": { color: "red" } },
+          });
+        `,
+        "keyframes-invalid-nested.ts",
+      ),
+    /dx-styles keyframes\(\) frame "from" cannot contain nested selectors \("&:hover"\)\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            $rtl: { transform: "none" },
+          });
+        `,
+        "keyframes-invalid-rtl.ts",
+      ),
+    /dx-styles keyframes\(\) does not support the \$rtl marker inside frames\./u,
+  );
+
+  await assert.rejects(
+    () =>
+      runWywTransform(
+        `
+          import { keyframes } from "dx-styles";
+
+          export const bad = keyframes({
+            from: { opacity: NaN },
+          });
+        `,
+        "keyframes-invalid-non-finite.ts",
+      ),
+    /dx-styles keyframes\(\) frame "from" property "opacity" must use finite numbers\./u,
+  );
+}
+
+async function testKeyframesUsageSurfaces() {
+  const result = await runWywTransform(
+    `
+      import { createTokenContract, keyframes, recipe } from "dx-styles";
+
+      const tokens = createTokenContract(
+        { motion: { distance: null } },
+        { prefix: "kf-usage" },
+      );
+
+      export const slide = keyframes({
+        "0%": { insetInlineStart: 0, opacity: 0.4 },
+        "100%": { insetInlineStart: tokens.motion.distance, opacity: 1 },
+      });
+
+      export const badge = recipe({
+        base: { display: "inline-flex" },
+        variants: {
+          motion: {
+            sliding: { animation: \`\${slide} 2s ease-in-out infinite\` },
+          },
+        },
+      });
+    `,
+    "keyframes-usage.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  const nameMatch = /@keyframes (slide_[^{\s]+)\{/u.exec(cssText);
+  assert.ok(nameMatch, cssText);
+  const name = nameMatch[1];
+
+  // Token references land inside frames as var() values.
+  assert.ok(cssText.includes("inset-inline-start:var(--kf-usage-motion-distance)"), cssText);
+  // Percentage frame keys pass through verbatim; unitless numbers formatted as usual.
+  assert.ok(cssText.includes("0%{inset-inline-start:0;opacity:0.4;}"), cssText);
+  // The recipe variant rule references the same deterministic name.
+  assert.ok(cssText.includes(`animation:${name} 2s ease-in-out infinite`), cssText);
+  // Recipe-generated selectors carry a content hash between the display name and the
+  // segment (see testRecipeTransformMinifiesClassNames), so pin the segment suffix
+  // rather than a literal "badge__motion-sliding".
+  assert.match(cssText, /\.badge_[^_{\s]+__motion-sliding\{/u);
+}
+
+async function testKeyframesCrossFileStaticTransform() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-static-keyframes-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "cross-file-"));
+
+  const motionSource = [
+    'import { keyframes } from "dx-styles";',
+    "",
+    "export const spin = keyframes({",
+    '  from: { transform: "rotate(0deg)" },',
+    '  to: { transform: "rotate(360deg)" },',
+    "});",
+    "",
+  ].join("\n");
+  const entrySource = [
+    'import { css } from "dx-styles";',
+    'import { spin } from "./motion";',
+    "",
+    "export const spinner = css({",
+    "  animationName: spin,",
+    "});",
+    "",
+  ].join("\n");
+
+  try {
+    await writeFile(join(fixtureRoot, "motion.ts"), motionSource);
+
+    let evalFileCount = 0;
+    const eventEmitter = new EventEmitter(
+      (labels, type) => {
+        if (type === "start" && labels.method === "transform:evalFile") {
+          evalFileCount += 1;
+        }
+      },
+      () => 0,
+      () => {},
+    );
+
+    const entryResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      eventEmitter,
+    });
+    const motionResult = await runWywTransform(motionSource, join(fixtureRoot, "motion.ts"));
+
+    // The name embedded into the consumer matches the emitted @keyframes rule
+    // from the declaring module's own transform — the determinism contract.
+    const declaredName = /@keyframes (spin_[^{\s]+)\{/u.exec(motionResult.cssText ?? "")?.[1];
+    assert.ok(declaredName, motionResult.cssText ?? "");
+    assert.ok(
+      (entryResult.cssText ?? "").includes(`animation-name:${declaredName}`),
+      entryResult.cssText ?? "",
+    );
+    // The consumer itself emits no @keyframes rule.
+    assert.equal((entryResult.cssText ?? "").includes("@keyframes"), false, entryResult.cssText);
+
+    // Static resolution handles the imported name without executing modules.
+    assert.equal(evalFileCount, 0);
+
+    // The default (static) output keeps a bare side-effect import of the
+    // declaring module — that import is load-bearing: it keeps motion.ts in
+    // the bundler graph so its @keyframes rule ships with the app CSS.
+    assert.ok(entryResult.code.includes('import "./motion";'), entryResult.code);
+
+    // Forcing full evaluation inlines the name and strips the import (engine
+    // behavior); the emitted CSS and the embedded animation name stay
+    // byte-identical across strategies.
+    const executeResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "execute",
+    });
+    assert.equal(entryResult.cssText, executeResult.cssText);
+    assert.ok(
+      (executeResult.cssText ?? "").includes(`animation-name:${declaredName}`),
+      executeResult.cssText ?? "",
+    );
+    assert.equal(executeResult.code.includes("./motion"), false, executeResult.code);
+    assert.ok(executeResult.code.includes(`animation-name`) === false, executeResult.code);
+
+    const embeddedName = (code: string) =>
+      /export const spinner = "([^"]+)";/u.exec(code)?.[1];
+    assert.equal(embeddedName(executeResult.code), embeddedName(entryResult.code));
+
+    // Hybrid parity too.
+    const hybridResult = await runWywTransform(entrySource, join(fixtureRoot, "entry.ts"), {
+      evalStrategy: "hybrid",
+    });
+    assert.equal(entryResult.cssText, hybridResult.cssText);
+    assert.equal(entryResult.code, hybridResult.code);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+async function testCssInlineKeyframesScoping() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const spinner = css({
+        animation: "spin 1s linear infinite",
+        "@keyframes spin": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+      });
+
+      export const dangling = css({
+        animationName: "spin",
+      });
+
+      export const wave = css({
+        animation: ":global(wave) 2s infinite",
+        "@keyframes :global(wave)": {
+          from: { transform: "rotate(0)" },
+          to: { transform: "rotate(10deg)" },
+        },
+      });
+
+      // The documented global pattern: :global() on the declaration key only,
+      // plain name in the reference. A :global keyframes is not "scoped", so
+      // the suffixer leaves the plain reference alone.
+      export const pulse = css({
+        animation: "pulse 3s ease-in-out",
+        "@keyframes :global(pulse)": {
+          from: { opacity: 0.4 },
+          to: { opacity: 1 },
+        },
+      });
+    `,
+    "css-inline-keyframes.ts",
+  );
+
+  const cssText = result.cssText ?? "";
+  const spinnerClass = /export const spinner = "([^"\s]+)";/u.exec(result.code)?.[1];
+  assert.ok(spinnerClass, result.code);
+
+  // Inline keyframes are scoped per rule: name suffixed with the rule's class,
+  // same-rule animation shorthand rewritten (wyw's stylis keyframe suffixer).
+  assert.ok(cssText.includes(`@keyframes spin-${spinnerClass}{`), cssText);
+  assert.ok(cssText.includes(`animation:spin-${spinnerClass} 1s linear infinite`), cssText);
+
+  // Documented limitation: a cross-rule reference stays unscoped and dangles.
+  assert.ok(cssText.includes("animation-name:spin;"), cssText);
+  assert.equal(cssText.includes("@keyframes spin{"), false, cssText);
+
+  // :global() opts out of scoping for the @keyframes rule itself: it emits
+  // under the raw name "wave" (no suffix, no ":global(" wrapper).
+  assert.ok(cssText.includes("@keyframes wave{"), cssText);
+
+  // But the same-rule "animation" shorthand reference is NOT unwrapped here,
+  // and is not vendor-prefixed either — verified directly against
+  // @wyw-in-js/transform's stylis pipeline in isolation (independent of any
+  // dx-styles code). Root cause: dx-styles serializes declarations as
+  // "prop:value" with no space, so the value ":global(wave) 2s infinite"
+  // lands immediately after the property colon, producing "animation::global(...)".
+  // Stylis's own parser then folds that second colon into the *property name*
+  // itself (element.props becomes the string "animation:", not "animation"),
+  // which makes the keyframe-suffixer plugin's `animationPropsSet.has(props)`
+  // check miss entirely — so it skips both the vendor-prefix duplication and
+  // the :global() unwrap/rewrite for this declaration. The ":global(wave)"
+  // text therefore survives verbatim in the emitted CSS.
+  assert.ok(cssText.includes("animation::global(wave) 2s infinite;"), cssText);
+  assert.equal(cssText.includes("-webkit-animation::global(wave)"), false, cssText);
+  assert.ok(cssText.includes(":global(wave)"), cssText);
+
+  // The documented global pattern works end to end: the rule emits under the
+  // raw name, and the plain-name reference stays untouched and gets vendor
+  // prefixes like any other animation declaration.
+  assert.ok(cssText.includes("@keyframes pulse{"), cssText);
+  assert.ok(cssText.includes("animation:pulse 3s ease-in-out;"), cssText);
+  assert.ok(cssText.includes("-webkit-animation:pulse 3s ease-in-out;"), cssText);
+  assert.equal(cssText.includes(":global(pulse)"), false, cssText);
 }
 
 async function testCreateTokenContractTransform() {
@@ -3332,10 +3821,15 @@ async function testThemeTransformRejectsInvalidRootValues() {
 async function testExplainMetadataTransform() {
   const result = await runWywTransform(
     `
-      import { css, createTheme, createTokenContract, recipe, slotRecipe } from "dx-styles";
+      import { css, createTheme, createTokenContract, keyframes, recipe, slotRecipe } from "dx-styles";
 
       const shared = css({
         color: "red",
+      });
+
+      export const wobble = keyframes({
+        from: { transform: "rotate(-3deg)", visibility: undefined },
+        to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
       });
 
       export const button = css(shared, {
@@ -3432,6 +3926,10 @@ async function testExplainMetadataTransform() {
     processorsByName.get("themeClassName"),
     "themeClassName processor metadata is missing",
   );
+  const wobbleProcessor = expectPresent(
+    processorsByName.get("wobble"),
+    "wobble processor metadata is missing",
+  );
 
   const sharedExplain = findDxStylesExplainPayload(sharedProcessor.artifacts);
   const buttonExplain = findDxStylesExplainPayload(buttonProcessor.artifacts);
@@ -3499,16 +3997,66 @@ async function testExplainMetadataTransform() {
   assert.deepEqual(themeExplain.entries[0].variables, ["--explain-metadata-color-accent"]);
   assert.equal(typeof themeExplain.entries[0].preevalClassName, "string");
 
+  const wobbleExplain = findDxStylesExplainPayload(wobbleProcessor.artifacts);
+  if (wobbleExplain === null) {
+    throw new Error("dx-styles keyframes explain metadata is missing");
+  }
+
+  assert.equal(wobbleExplain.entries.length, 1);
+  const wobbleEntry = wobbleExplain.entries[0];
+  if (wobbleEntry.kind !== "keyframes") {
+    throw new Error(`expected keyframes explain entry, got "${wobbleEntry.kind}"`);
+  }
+  assert.equal(wobbleEntry.node, "keyframes");
+  assert.deepEqual(wobbleEntry.frames, ["from", "to"]);
+  assert.deepEqual(wobbleEntry.composeRefs, []);
+  assert.match(wobbleEntry.preevalClassName, /^dxk_[0-9a-z]+$/u);
+
+  // Twin-drift insurance: the processor's preevalClassName must equal the
+  // runtime fallback's name for identical frames — including normalization
+  // (the undefined value is dropped, the fallback array is preserved).
+  assert.equal(
+    wobbleEntry.preevalClassName,
+    keyframes({
+      from: { transform: "rotate(-3deg)", visibility: undefined },
+      to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
+    }),
+  );
+  assert.equal(
+    wobbleEntry.preevalClassName,
+    keyframes({
+      from: { transform: "rotate(-3deg)" },
+      to: { transform: "rotate(3deg)", transitionDuration: ["120ms", "0.12s"] },
+    }),
+  );
+
+  // wyw hardcodes `rules: {}` inside `result.metadata` (through at least
+  // 2.4.1), and the stock @wyw-in-js/vite plugin serializes exactly that
+  // metadata into `.wyw-in-js.json`. Build the manifest the same way, so this
+  // exercises the production shape: rule-derived record fields (selector,
+  // cssText) must be recovered from the processors' "css" artifacts.
   const manifest = createDxStylesExplainManifest(metadata, {
     cssFile: "src/explain-metadata.wyw-in-js.css",
     source: "src/explain-metadata.ts",
   });
+  assert.deepEqual(Object.keys(manifest.rules), []);
   const explainIndex = createDxStylesExplainIndex(manifest);
   const buttonRecords = explainIndex.get(buttonExplain.entries[0].className);
   assert.ok(buttonRecords);
   assert.equal(buttonRecords.length, 1);
   assert.equal(buttonRecords[0].compose[0].className, sharedExplain.entries[0].className);
   assert.equal(buttonRecords[0].compose[0].symbol, "shared");
+  assert.equal(buttonRecords[0].selector, `.${buttonExplain.entries[0].className}`);
+  assert.equal(buttonRecords[0].cssText, "color:red;background-color:blue;");
+
+  const wobbleRecords = explainIndex.get(wobbleEntry.className);
+  assert.ok(wobbleRecords);
+  assert.equal(wobbleRecords.length, 1);
+  assert.equal(wobbleRecords[0].selector, `@keyframes ${wobbleEntry.className}`);
+  assert.equal(
+    wobbleRecords[0].cssText,
+    "from{transform:rotate(-3deg);}to{transform:rotate(3deg);transition-duration:120ms;transition-duration:0.12s;}",
+  );
 }
 
 function testExplainManifestFormatting() {
@@ -3641,6 +4189,164 @@ function testExplainManifestFormatting() {
   assert.match(report, /variant: size=sm/u);
   assert.match(report, /css: @media \(width >= 768px\)\{color:red;\}/u);
   assert.match(report, /missing\n {2}status: not found/u);
+}
+
+function testKeyframesExplainFormatting() {
+  const manifest = createDxStylesExplainManifest(
+    {
+      dependencies: [],
+      processors: [
+        {
+          artifacts: [
+            createExplainArtifact([
+              {
+                className: "wave_k1",
+                composeRefs: [],
+                frames: ["0%, 100%", "50%"],
+                kind: "keyframes",
+                node: "keyframes",
+                preevalClassName: "dxk_test",
+              },
+            ]),
+          ],
+          className: "wave_k1",
+          displayName: "wave",
+          start: { column: 3, line: 7 },
+        },
+      ],
+      replacements: [],
+      rules: {
+        "@keyframes wave_k1": {
+          className: "wave_k1",
+          cssText: "0%, 100%{transform:rotate(0);}50%{transform:rotate(10deg);}",
+          displayName: "wave",
+          start: { column: 3, line: 7 },
+        },
+      },
+    },
+    { cssFile: "src/wave.wyw-in-js.css", source: "src/wave.ts" },
+  );
+
+  const report = formatDxStylesExplainReport(manifest, ["wave_k1"]);
+
+  assert.ok(report.includes("kind: keyframes"), report);
+  assert.ok(report.includes("node: keyframes"), report);
+  assert.ok(report.includes("frames: 0%, 100% | 50%"), report);
+  assert.ok(report.includes("selector: @keyframes wave_k1"), report);
+  assert.ok(report.includes("symbol: wave"), report);
+}
+
+function testExplainIndexRecoversRulesFromCssArtifacts() {
+  // Production manifests written by the stock @wyw-in-js/vite plugin (through
+  // at least 2.4.1) carry `rules: {}` — the selector-keyed rules survive only
+  // inside each processor's ["css", [rules, replacements]] artifact. The
+  // explain index must recover selector/cssText from those artifacts.
+  const manifest = createDxStylesExplainManifest(
+    {
+      dependencies: [],
+      processors: [
+        {
+          artifacts: [
+            [
+              "css",
+              [
+                {
+                  "@keyframes wobble_w1": {
+                    className: "wobble_w1",
+                    cssText: "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
+                    displayName: "wobble",
+                    start: { column: 22, line: 3 },
+                  },
+                },
+                [],
+              ],
+            ],
+            createExplainArtifact([
+              {
+                className: "wobble_w1",
+                composeRefs: [],
+                frames: ["from", "to"],
+                kind: "keyframes",
+                node: "keyframes",
+                preevalClassName: "dxk_test",
+              },
+            ]),
+          ],
+          className: "wobble_w1",
+          displayName: "wobble",
+          start: { column: 22, line: 3 },
+        },
+        {
+          artifacts: [
+            [
+              "css",
+              [
+                {
+                  ".button_b1": {
+                    className: "button_b1",
+                    cssText: "color:red;",
+                    displayName: "button",
+                    start: { column: 22, line: 8 },
+                  },
+                },
+                [],
+              ],
+            ],
+            createExplainArtifact([
+              {
+                className: "button_b1",
+                composeRefs: [],
+                kind: "css",
+                node: "style",
+                preevalClassName: "dxs_test",
+              },
+            ]),
+          ],
+          className: "button_b1",
+          displayName: "button",
+          start: { column: 22, line: 8 },
+        },
+      ],
+      replacements: [],
+      rules: {},
+    },
+    { cssFile: "src/index.wyw-in-js.css", source: "src/index.ts" },
+  );
+
+  const explainIndex = createDxStylesExplainIndex(manifest);
+  const buttonRecords = explainIndex.get("button_b1");
+  const wobbleRecords = explainIndex.get("wobble_w1");
+  assert.ok(buttonRecords);
+  assert.ok(wobbleRecords);
+  assert.equal(buttonRecords[0].selector, ".button_b1");
+  assert.equal(buttonRecords[0].cssText, "color:red;");
+  assert.equal(wobbleRecords[0].selector, "@keyframes wobble_w1");
+  assert.equal(
+    wobbleRecords[0].cssText,
+    "from{transform:rotate(-3deg);}to{transform:rotate(3deg);}",
+  );
+
+  const report = formatDxStylesExplainReport(manifest, ["wobble_w1"]);
+  assert.ok(report.includes("selector: @keyframes wobble_w1"), report);
+  assert.ok(report.includes("css: from{transform:rotate(-3deg);}"), report);
+
+  // Populated manifest.rules stay authoritative over artifact-derived rules,
+  // so an upstream fix that starts filling them in wins automatically.
+  const overriddenIndex = createDxStylesExplainIndex({
+    ...manifest,
+    rules: {
+      ".button_b1": {
+        className: "button_b1",
+        cssText: "color:blue;",
+        displayName: "button",
+        start: { column: 22, line: 8 },
+      },
+    },
+  });
+  const overriddenRecords = overriddenIndex.get("button_b1");
+  assert.ok(overriddenRecords);
+  assert.equal(overriddenRecords[0].cssText, "color:blue;");
+  assert.equal(overriddenRecords[0].selector, ".button_b1");
 }
 
 function testExplainManifestHandlesAmbiguousComposeRefs() {
@@ -4240,6 +4946,7 @@ async function testSharedLibraryBuildRemovesArtifactsWhenDxStylesSourceIsDeleted
 
 async function main() {
   testRuntimeHelpers();
+  testRuntimeKeyframes();
   testRuntimeStyleHandles();
   testRecipePropSplitting();
   await testBuiltRootEntryStyleHandles();
@@ -4255,6 +4962,7 @@ async function main() {
   testPackageExports();
   await testPackageExportConditionResolution();
   await testCssTransform();
+  await testFallbackArraySerialization();
   await testCssTransformComposesPublicStyleHandles();
   await testCssTransformRejectsNestedStyleHandles();
   await testCssTransformRejectsClassValuesInSelectorKeys();
@@ -4269,6 +4977,11 @@ async function main() {
   await testCssStaticParityMatrix();
   await testCreateVarTransform();
   await testCreateVarCrossFileStaticTransform();
+  await testKeyframesTransform();
+  await testKeyframesTransformRejectsInvalidConfigs();
+  await testKeyframesUsageSurfaces();
+  await testKeyframesCrossFileStaticTransform();
+  await testCssInlineKeyframesScoping();
   await testCreateTokenContractTransform();
   await testCreateTokenContractCrossFileStaticTransform();
   await testRecipeTransform();
@@ -4288,6 +5001,8 @@ async function main() {
   await testThemeTransformRejectsInvalidRootValues();
   await testExplainMetadataTransform();
   testExplainManifestFormatting();
+  testKeyframesExplainFormatting();
+  testExplainIndexRecoversRulesFromCssArtifacts();
   testExplainManifestHandlesAmbiguousComposeRefs();
   await testDiagnosticsTransform();
   await testDiagnosticsDoNotRequireMetadataOutput();

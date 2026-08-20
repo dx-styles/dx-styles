@@ -13,6 +13,7 @@ import {
   cx,
   DX_STYLES_DESCRIPTOR_KEY,
   getDescriptorClassName,
+  keyframes as keyframesRuntime,
   splitRecipeProps as splitRecipePropsRuntime,
   splitSlotRecipeProps as splitSlotRecipePropsRuntime,
   toCssClassName,
@@ -21,6 +22,8 @@ import type {
   ContractShape,
   ContractValues,
   CssClassName,
+  KeyframesConfig,
+  KeyframesName,
   PartialContractValues,
   Recipe,
   RecipeConfig,
@@ -70,6 +73,10 @@ function compileClassName(part: StylePart): string {
 
 export function css(...parts: StylePart[]): CssClassName {
   return getDescriptorClassName(createCssDescriptor(...parts));
+}
+
+export function keyframes(frames: KeyframesConfig): KeyframesName {
+  return keyframesRuntime(frames);
 }
 
 export { cx };

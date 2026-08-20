@@ -13,6 +13,7 @@ const HASH_MODULUS = 2147483647;
 const HASH_MULTIPLIER = 33;
 const HASH_SEED = 5381;
 const CSS_CLASS_NAME_PREFIX = "dxs";
+const KEYFRAMES_NAME_PREFIX = "dxk";
 
 export type StylePrimitive = number | string;
 export type StyleLeafValue = readonly StylePrimitive[] | StylePrimitive;
@@ -51,6 +52,25 @@ export interface StyleDescriptorCarrier {
  * `resolveStylePart` throws on at runtime.
  */
 export type CssClassName = `${typeof CSS_CLASS_NAME_PREFIX}_${string}`;
+
+/**
+ * An animation name produced by `keyframes()`. Same modelling as
+ * `CssClassName`: a template-literal string subtype, so it contributes no
+ * completions inside object literals while rejecting arbitrary strings.
+ */
+export type KeyframesName = `${typeof KEYFRAMES_NAME_PREFIX}_${string}`;
+
+/**
+ * A single keyframe: declarations only. Nested selectors and at-rules are
+ * invalid inside @keyframes and are rejected at build time and runtime alike.
+ */
+export type KeyframeFrame = PropertiesFallback<number | string> & {
+  readonly [key: string]: StyleLeafValue | undefined;
+};
+
+export interface KeyframesConfig {
+  readonly [frame: string]: KeyframeFrame;
+}
 
 export interface StyleHandle extends StyleDescriptorCarrier {
   readonly [STYLE_HANDLE_BRAND]: "dx-styles-style-handle";
@@ -530,6 +550,103 @@ export function toCssClassName(value: string): CssClassName {
 
 export function createRuntimeClassName(prefix: string, value: unknown): string {
   return `${prefix}_${hashString(stableStringify(value))}`;
+}
+
+function assertValidKeyframeKey(key: string): void {
+  if (key === "$rtl" || key === "$noflip") {
+    throw new Error(`dx-styles keyframes() does not support the ${key} marker inside frames.`);
+  }
+
+  if (key.includes("[object Object]")) {
+    throw new Error(
+      `dx-styles keyframes() key "${key}" contains "[object Object]"; class values cannot be interpolated into keyframe keys.`,
+    );
+  }
+}
+
+function assertFiniteKeyframeValue(
+  frame: string,
+  property: string,
+  value: StyleLeafValue,
+): void {
+  const values = Array.isArray(value) ? value : [value];
+
+  if (values.some((entry) => typeof entry === "number" && !Number.isFinite(entry))) {
+    throw new Error(
+      `dx-styles keyframes() frame "${frame}" property "${property}" must use finite numbers.`,
+    );
+  }
+}
+
+function expectKeyframesFrames(
+  value: unknown,
+): Record<string, Record<string, StyleLeafValue>> {
+  if (!isPlainObject(value) || hasDxStylesDescriptorKey(value)) {
+    throw new Error("dx-styles keyframes() requires a statically analyzable keyframes object.");
+  }
+
+  return recordEntries(value).reduce<Record<string, Record<string, StyleLeafValue>>>(
+    (frames, [frame, frameValue]) => {
+      assertValidKeyframeKey(frame);
+
+      if (!isPlainObject(frameValue) || hasDxStylesDescriptorKey(frameValue)) {
+        throw new Error(
+          `dx-styles keyframes() frame "${frame}" must be a plain style object of declarations.`,
+        );
+      }
+
+      const declarations = recordEntries(frameValue as Record<string, StyleEntry>).reduce<
+        Record<string, StyleLeafValue>
+      >(
+        (acc, [property, propertyValue]) => {
+          assertValidKeyframeKey(property);
+
+          if (propertyValue === undefined || propertyValue === null || propertyValue === false) {
+            return acc;
+          }
+
+          if (isPlainObject(propertyValue)) {
+            throw new Error(
+              `dx-styles keyframes() frame "${frame}" cannot contain nested selectors ("${property}").`,
+            );
+          }
+
+          if (Array.isArray(propertyValue) && !isStyleLeafArray(propertyValue)) {
+            throw new Error(
+              `dx-styles keyframes() frame "${frame}" property "${property}" cannot use non-primitive array values.`,
+            );
+          }
+
+          if (!isStylePrimitive(propertyValue) && !isStyleLeafArray(propertyValue)) {
+            throw new Error(
+              `dx-styles keyframes() frame "${frame}" property "${property}" must be a primitive or primitive array.`,
+            );
+          }
+
+          assertFiniteKeyframeValue(frame, property, propertyValue);
+
+          return {
+            ...acc,
+            [property]: isStyleLeafArray(propertyValue) ? [...propertyValue] : propertyValue,
+          };
+        },
+        {},
+      );
+
+      return {
+        ...frames,
+        [frame]: declarations,
+      };
+    },
+    {},
+  );
+}
+
+export function keyframes(frames: KeyframesConfig): KeyframesName {
+  return createRuntimeClassName(
+    KEYFRAMES_NAME_PREFIX,
+    expectKeyframesFrames(frames),
+  ) as KeyframesName;
 }
 
 export function getDescriptorClassName(value: PreevalCssValue): CssClassName;

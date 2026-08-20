@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "dx-styles/keyframes",
+  "implementation": "./keyframes.js",
+  "tags": ["keyframes"],
+  "semantics": {
+    "kind": "class-name-call"
+  }
+}

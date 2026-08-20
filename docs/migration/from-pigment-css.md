@@ -27,7 +27,7 @@ npm install -D @wyw-in-js/vite   # or @wyw-in-js/nextjs for Next.js
 | `sx` prop | `css(...)` classes composed with [`cx(...)`](../authoring.md); dynamic values via `assignVars` |
 | `extendTheme(...)` + `theme.vars.*` | [`createTokenContract` + `createTheme`](../tokens-and-themes.md); reference `tokens.*` directly |
 | `globalCss` | A plain `.css` file imported once |
-| `keyframes` | `@keyframes` in a plain `.css` file, referenced by name |
+| `keyframes` | [`keyframes(...)`](../keyframes.md) — a deterministic animation name |
 | `generateForBothDir` (whole-output RTL) | [`$rtl` subtree markers](../rtl.md) — opt-in, per style object |
 | `useTheme()` for style values | Token references resolve at build time; runtime reads use `var(...)` |
 
@@ -92,7 +92,7 @@ pass is usually cheaper than a long coexistence window:
 1. Swap plugins; port theme config onto a token contract.
 2. Convert `styled` calls to recipes + `className` components; keep markup identical.
 3. Replace `sx` usages with authored classes (or `assignVars` where values are dynamic).
-4. Move `globalCss`/`keyframes` into plain CSS.
+4. Move `globalCss` into plain CSS; port `keyframes` to [`keyframes(...)`](../keyframes.md).
 
 ## Checklist
 
