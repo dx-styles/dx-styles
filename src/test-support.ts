@@ -89,7 +89,7 @@ export function recipe<TVariants extends VariantDefinitions>(
   const runtimeRecipe = createRuntimeRecipe(definition);
 
   const testRecipe = (selection?: VariantSelection<TVariants>) => {
-    const runtimeSelection: Record<string, string | undefined> | undefined =
+    const runtimeSelection: Record<string, boolean | string | undefined> | undefined =
       selection === undefined ? undefined : { ...selection };
 
     return runtimeRecipe(runtimeSelection);
@@ -106,7 +106,7 @@ export function slotRecipe<
   const runtimeSlotRecipe = createRuntimeSlotRecipe(definition);
 
   const testSlotRecipe = (selection?: SlotVariantSelection<TVariants>) => {
-    const runtimeSelection: Record<string, string | undefined> | undefined =
+    const runtimeSelection: Record<string, boolean | string | undefined> | undefined =
       selection === undefined ? undefined : { ...selection };
 
     return runtimeSlotRecipe(runtimeSelection);

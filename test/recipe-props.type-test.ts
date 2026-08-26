@@ -51,6 +51,33 @@ expectType(splitButtonProps.otherProps.appearance);
 // @ts-expect-error Recipe variants only accept declared values.
 splitRecipeProps(button, { appearance: "outline" });
 
+const toggle = recipe({
+  compoundVariants: [
+    {
+      checked: true,
+      css: { fontWeight: 700 },
+    },
+  ],
+  defaultVariants: {
+    checked: false,
+  },
+  variants: {
+    checked: {
+      true: { color: "green" },
+    },
+  },
+});
+type ToggleVariantProps = RecipeVariantProps<typeof toggle>;
+const toggleProps: ToggleVariantProps = { checked: true };
+const splitToggleProps = splitRecipeProps(toggle, toggleProps);
+
+toggle({ checked: false });
+toggle({ checked: "true" });
+expectType<boolean | "true" | undefined>(splitToggleProps.variantProps.checked);
+
+// @ts-expect-error Boolean recipe axes continue to reject undeclared string values.
+toggle({ checked: "false" });
+
 const field = slotRecipe({
   slots: ["root", "control"] as const,
   variants: {
@@ -72,3 +99,20 @@ expectType<string>(splitFieldProps.otherProps.id);
 
 // @ts-expect-error Slot recipe variants are removed from the remaining component props.
 expectType(splitFieldProps.otherProps.density);
+
+const switchField = slotRecipe({
+  slots: ["root"] as const,
+  variants: {
+    checked: {
+      false: { root: { color: "gray" } },
+      true: { root: { color: "green" } },
+    },
+  },
+});
+type SwitchFieldVariantProps = RecipeVariantProps<typeof switchField>;
+
+expectType<boolean | "false" | "true" | undefined>(
+  expectType<SwitchFieldVariantProps>({ checked: false }).checked,
+);
+switchField({ checked: true });
+switchField({ checked: "false" });

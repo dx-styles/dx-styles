@@ -93,7 +93,7 @@ interface LooseCompoundVariant {
 interface LooseRecipeConfig {
   readonly base?: unknown;
   readonly compoundVariants?: readonly LooseCompoundVariant[];
-  readonly defaultVariants?: Readonly<Record<string, string>>;
+  readonly defaultVariants?: Readonly<Record<string, boolean | string>>;
   readonly variants?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 
@@ -101,7 +101,7 @@ interface LooseSlotRecipeConfig {
   readonly slots: readonly string[];
   readonly base?: Readonly<Record<string, unknown>>;
   readonly compoundVariants?: readonly LooseCompoundVariant[];
-  readonly defaultVariants?: Readonly<Record<string, string>>;
+  readonly defaultVariants?: Readonly<Record<string, boolean | string>>;
   readonly variants?: Readonly<
     Record<string, Readonly<Record<string, Readonly<Record<string, unknown>>>>>
   >;
@@ -638,12 +638,22 @@ export function collectStringMatches(
   value: Readonly<Record<string, unknown>>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(value).filter(([key, entry]) => key !== "css" && typeof entry === "string"),
+    Object.entries(value)
+      .filter(
+        ([key, entry]) =>
+          key !== "css" && (typeof entry === "boolean" || typeof entry === "string"),
+      )
+      .map(([key, entry]) => [key, String(entry)]),
   ) as Record<string, string>;
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isPlainObject(value) && Object.values(value).every((entry) => typeof entry === "string");
+function isVariantSelectionRecord(value: unknown): value is Record<string, boolean | string> {
+  return (
+    isPlainObject(value) &&
+    Object.values(value).every(
+      (entry) => typeof entry === "boolean" || typeof entry === "string",
+    )
+  );
 }
 
 function isLooseCompoundVariantEntry(value: unknown): value is LooseCompoundVariant {
@@ -656,7 +666,7 @@ function isLooseCompoundVariant(value: unknown): value is LooseCompoundVariant {
   }
 
   return Object.entries(value).every(([key, entry]) => {
-    return key === "css" || typeof entry === "string";
+    return key === "css" || typeof entry === "boolean" || typeof entry === "string";
   });
 }
 
@@ -665,7 +675,7 @@ function isLooseRecipeConfig(value: unknown): value is LooseRecipeConfig {
     return false;
   }
 
-  if (value.defaultVariants !== undefined && !isStringRecord(value.defaultVariants)) {
+  if (value.defaultVariants !== undefined && !isVariantSelectionRecord(value.defaultVariants)) {
     return false;
   }
 
@@ -706,7 +716,7 @@ function isLooseSlotRecipeConfig(value: unknown): value is LooseSlotRecipeConfig
     return false;
   }
 
-  if (value.defaultVariants !== undefined && !isStringRecord(value.defaultVariants)) {
+  if (value.defaultVariants !== undefined && !isVariantSelectionRecord(value.defaultVariants)) {
     return false;
   }
 
@@ -837,7 +847,7 @@ function expectCompoundVariantEntry(
 } {
   if (!isLooseCompoundVariant(entry)) {
     throw new Error(
-      `dx-styles ${componentName}() compound variant #${index} must include css and string match values.`,
+      `dx-styles ${componentName}() compound variant #${index} must include css and string or boolean match values.`,
     );
   }
 
@@ -1040,7 +1050,9 @@ export function createRecipeRuntimeDefinition(
         matches,
       };
     }),
-    defaultVariants: { ...(config.defaultVariants ?? {}) },
+    defaultVariants: Object.fromEntries(
+      Object.entries(config.defaultVariants ?? {}).map(([axis, value]) => [axis, String(value)]),
+    ),
     variantOrder,
     variants: Object.fromEntries(
       variantOrder.map((axis) => [
@@ -1137,7 +1149,9 @@ export function createSlotRecipeRuntimeDefinition(
         matches,
       };
     }),
-    defaultVariants: { ...(config.defaultVariants ?? {}) },
+    defaultVariants: Object.fromEntries(
+      Object.entries(config.defaultVariants ?? {}).map(([axis, value]) => [axis, String(value)]),
+    ),
     slots: config.slots,
     variantOrder,
     variants: Object.fromEntries(

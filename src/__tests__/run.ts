@@ -845,6 +845,61 @@ function testRuntimeHelpers() {
 
   assert.equal(runtimeRecipe({ size: undefined }), runtimeRecipe());
 
+  const toggle = recipe({
+    base: {
+      display: "inline-flex",
+    },
+    compoundVariants: [
+      {
+        checked: true,
+        css: {
+          fontWeight: 700,
+        },
+      },
+    ],
+    defaultVariants: {
+      checked: true,
+    },
+    variants: {
+      checked: {
+        true: {
+          color: "green",
+        },
+      },
+    },
+  });
+  const toggleOffClassName = toggle({ checked: false });
+  const toggleOnClassName = toggle({ checked: true });
+
+  assert.equal(toggleOffClassName.split(/\s+/u).filter(Boolean).length, 1);
+  assert.equal(toggleOnClassName.split(/\s+/u).filter(Boolean).length, 3);
+  assert.equal(toggleOnClassName, toggle());
+  assert.equal(toggleOnClassName, toggle({ checked: "true" }));
+
+  const booleanSlotRecipe = slotRecipe({
+    slots: ["root"] as const,
+    variants: {
+      checked: {
+        false: {
+          root: {
+            color: "gray",
+          },
+        },
+        true: {
+          root: {
+            color: "green",
+          },
+        },
+      },
+    },
+  });
+  const booleanSlotOffClassName = booleanSlotRecipe({ checked: false }).root;
+  const booleanSlotOnClassName = booleanSlotRecipe({ checked: true }).root;
+
+  assert.notEqual(booleanSlotOffClassName, booleanSlotOnClassName);
+  assert.equal(booleanSlotOffClassName, booleanSlotRecipe({ checked: "false" }).root);
+  assert.equal(booleanSlotOnClassName, booleanSlotRecipe({ checked: "true" }).root);
+
   const specialAxis = "__proto__";
   const recipeWithSpecialAxis = recipe({
     compoundVariants: [
@@ -911,7 +966,7 @@ function testRuntimeHelpers() {
         },
       ],
     });
-  }, /compound variant #0 (?:must include css and string match values|requires string match values)/u);
+  }, /compound variant #0 (?:must include css and string or boolean match values|requires string or boolean match values)/u);
 
   assert.throws(() => {
     return recipe({
@@ -1544,6 +1599,25 @@ function testProcessorRuntimeDefinitionsPreserveSpecialMatches() {
 
   assert.equal(Object.hasOwn(compoundVariant.matches, specialAxis), true);
   assert.equal(readOwnStringProperty(compoundVariant.matches, specialAxis), "active");
+
+  const booleanDefinition = createRecipeRuntimeDefinition(
+    "processor-boolean",
+    {
+      compoundVariants: [{ checked: true, css: { fontWeight: 700 } }],
+      defaultVariants: { checked: false },
+      variants: {
+        checked: {
+          true: {
+            color: "green",
+          },
+        },
+      },
+    },
+    false,
+  );
+
+  assert.deepEqual(booleanDefinition.defaultVariants, { checked: "false" });
+  assert.deepEqual(booleanDefinition.compoundVariants[0]?.matches, { checked: "true" });
 }
 
 function testRecipeRuntimeDefinitionKeepsReadableClassNames() {
@@ -2974,6 +3048,11 @@ async function testRecipeTransform() {
           color: "red",
         },
         variants: {
+          checked: {
+            true: {
+              outlineWidth: 2,
+            },
+          },
           intent: {
             primary: {
               color: "blue",
@@ -2987,8 +3066,15 @@ async function testRecipeTransform() {
               fontWeight: 700,
             },
           },
+          {
+            checked: true,
+            css: {
+              opacity: 0.8,
+            },
+          },
         ],
         defaultVariants: {
+          checked: false,
           intent: "primary",
         },
       });
@@ -3007,6 +3093,8 @@ async function testRecipeTransform() {
   assert.ok(baseIndex >= 0);
   assert.ok(variantIndex > baseIndex);
   assert.ok(compoundIndex > variantIndex);
+  assert.match(cssText, /outline-width:2px;/u);
+  assert.match(cssText, /opacity:0\.8;/u);
 }
 
 async function testRecipeTransformMinifiesClassNames() {
@@ -3278,7 +3366,7 @@ async function testRecipeTransformRejectsMalformedCompoundVariants() {
         `,
         "recipe-invalid-compound-match.ts",
       ),
-    /compound variant #0 (?:must include css and string match values|requires string match values)/u,
+    /compound variant #0 (?:must include css and string or boolean match values|requires string or boolean match values)/u,
   );
 
   await assert.rejects(
@@ -3297,7 +3385,7 @@ async function testRecipeTransformRejectsMalformedCompoundVariants() {
         `,
         "recipe-invalid-compound-css.ts",
       ),
-    /compound variant #0 (?:must include css and string match values|requires a css field)/u,
+    /compound variant #0 (?:must include css and string or boolean match values|requires a css field)/u,
   );
 
   await assert.rejects(
@@ -3346,6 +3434,18 @@ async function testSlotRecipeTransform() {
           },
         },
         variants: {
+          checked: {
+            false: {
+              root: {
+                opacity: 0.6,
+              },
+            },
+            true: {
+              root: {
+                opacity: 1,
+              },
+            },
+          },
           size: {
             md: {
               body: {
@@ -3355,6 +3455,7 @@ async function testSlotRecipeTransform() {
           },
         },
         defaultVariants: {
+          checked: false,
           size: "md",
         },
       });
@@ -3366,6 +3467,8 @@ async function testSlotRecipeTransform() {
   assert.match(result.cssText ?? "", /display:grid;/u);
   assert.match(result.cssText ?? "", /padding:12px;/u);
   assert.match(result.cssText ?? "", /gap:8px;/u);
+  assert.match(result.cssText ?? "", /opacity:0\.6;/u);
+  assert.match(result.cssText ?? "", /opacity:1;/u);
 }
 
 async function testSlotRecipeTransformMinifiesClassNames() {
@@ -3569,7 +3672,7 @@ async function testSlotRecipeTransformRejectsMalformedCompoundVariants() {
         `,
         "slot-recipe-invalid-compound.ts",
       ),
-    /compound variant #0 (?:must include css and string match values|requires string match values)/u,
+    /compound variant #0 (?:must include css and string or boolean match values|requires string or boolean match values)/u,
   );
 
   await assert.rejects(
