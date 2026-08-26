@@ -22,7 +22,7 @@ function setRecordEntry<TKey extends string, TValue>(
 }
 
 function normalizeSelection(
-  selection?: Record<string, string | undefined>,
+  selection?: Record<string, boolean | string | undefined>,
 ): Partial<Record<string, string>> {
   if (selection === undefined) {
     return {};
@@ -32,7 +32,7 @@ function normalizeSelection(
     const value = selection[key];
 
     if (value !== undefined) {
-      setRecordEntry(acc, key, value);
+      setRecordEntry(acc, key, typeof value === "boolean" ? String(value) : value);
     }
 
     return acc;
@@ -41,7 +41,7 @@ function normalizeSelection(
 
 function resolveVariants(
   defaults: Record<string, string>,
-  next?: Record<string, string | undefined>,
+  next?: Record<string, boolean | string | undefined>,
 ): Partial<Record<string, string>> {
   const resolvedSelection: Partial<Record<string, string>> = {};
 
@@ -69,8 +69,8 @@ function hasAllSlots<TSlot extends string>(
  */
 export function createRuntimeRecipe(
   definition: RuntimeRecipeDefinition,
-): (selection?: Record<string, string | undefined>) => string {
-  const recipe = (selection?: Record<string, string | undefined>) => {
+): (selection?: Record<string, boolean | string | undefined>) => string {
+  const recipe = (selection?: Record<string, boolean | string | undefined>) => {
     const resolvedSelection = resolveVariants(definition.defaultVariants, selection);
 
     const classNames = [
@@ -105,8 +105,8 @@ export function createRuntimeRecipe(
  */
 export function createRuntimeSlotRecipe<TSlot extends string>(
   definition: RuntimeSlotRecipeDefinition<TSlot>,
-): (selection?: Record<string, string | undefined>) => Record<TSlot, string> {
-  const slotRecipe = (selection?: Record<string, string | undefined>) => {
+): (selection?: Record<string, boolean | string | undefined>) => Record<TSlot, string> {
+  const slotRecipe = (selection?: Record<string, boolean | string | undefined>) => {
     const resolvedSelection = resolveVariants(definition.defaultVariants, selection);
     const result: Partial<Record<TSlot, string>> = {};
 

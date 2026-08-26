@@ -105,8 +105,12 @@ export type TokenContract<TShape extends ContractShape> = {
   [TKey in keyof TShape]: TShape[TKey] extends ContractShape ? TokenContract<TShape[TKey]> : string;
 };
 
+type VariantAxisValue<TAxis extends Record<string, unknown>> =
+  | (keyof TAxis & string)
+  | ("true" extends keyof TAxis ? boolean : "false" extends keyof TAxis ? boolean : never);
+
 type VariantAxisSelection<TVariants extends Record<string, Record<string, unknown>>> = {
-  [TAxis in keyof TVariants]?: keyof TVariants[TAxis] & string;
+  [TAxis in keyof TVariants]?: VariantAxisValue<TVariants[TAxis]>;
 };
 export type VariantDefinitions = Record<string, Record<string, StylePart>>;
 export type VariantSelection<TVariants extends VariantDefinitions> =
@@ -1200,15 +1204,15 @@ function createSlotClassRecord<TSlot extends string>(
 }
 
 function normalizeDefaultVariants(
-  defaultVariants?: Record<string, string | undefined>,
+  defaultVariants?: Record<string, boolean | string | undefined>,
 ): Record<string, string> {
   if (defaultVariants === undefined) {
     return {};
   }
 
   return recordEntries(defaultVariants).reduce<Record<string, string>>((acc, [key, value]) => {
-    if (typeof value === "string") {
-      setRecordEntry(acc, key, value);
+    if (typeof value === "boolean" || typeof value === "string") {
+      setRecordEntry(acc, key, String(value));
     }
 
     return acc;
@@ -1239,13 +1243,13 @@ function expectCompoundVariantEntry<TCss>(
       );
     }
 
-    if (typeof value !== "string") {
+    if (typeof value !== "boolean" && typeof value !== "string") {
       throw new Error(
-        `dx-styles ${componentName}() compound variant #${index} requires string match values.`,
+        `dx-styles ${componentName}() compound variant #${index} requires string or boolean match values.`,
       );
     }
 
-    setRecordEntry(acc, key, value);
+    setRecordEntry(acc, key, String(value));
     return acc;
   }, {});
 

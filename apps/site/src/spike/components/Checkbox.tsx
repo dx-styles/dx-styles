@@ -27,8 +27,8 @@ export const Checkbox = ({
   const [uncontrolledChecked, setUncontrolledChecked] = useState(Boolean(defaultChecked));
   const resolvedChecked = checked ?? uncontrolledChecked;
   const slots = checkbox({
-    checked: resolvedChecked ? "true" : "false",
-    indeterminate: indeterminate ? "true" : "false",
+    checked: resolvedChecked,
+    indeterminate,
   });
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>): void => {
