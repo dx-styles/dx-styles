@@ -1,5 +1,11 @@
 # dx-styles
 
+## 1.4.1
+
+### Patch Changes
+
+- [#32](https://github.com/dx-styles/dx-styles/pull/32) [`40ae587`](https://github.com/dx-styles/dx-styles/commit/40ae587eff8e05c8e4302d3f68b6fafb6dbf94d2) Thanks [@Anber](https://github.com/Anber)! - Allow boolean selections for `recipe()` and `slotRecipe()` variant axes that declare `true` or `false`. Existing string-based selections remain supported; boolean defaults and compound variants are normalized consistently in runtime and static extraction.
+
 ## 1.4.0
 
 ### Minor Changes
