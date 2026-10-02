@@ -1,5 +1,11 @@
 # dx-styles
 
+## 1.4.2
+
+### Patch Changes
+
+- [#34](https://github.com/dx-styles/dx-styles/pull/34) [`9d498c0`](https://github.com/dx-styles/dx-styles/commit/9d498c033c09b1d854dde94cc39ae9e3e8fca60e) Thanks [@Anber](https://github.com/Anber)! - Preserve declaration files for existing sources when pruning JavaScript build artifacts, including sources excluded from standalone entry points.
+
 ## 1.4.1
 
 ### Patch Changes
