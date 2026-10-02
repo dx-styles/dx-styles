@@ -4922,6 +4922,50 @@ async function testSharedLibraryBuildRemovesArtifactsWhenDxStylesSourceIsDeleted
   }
 }
 
+async function testSharedLibraryBuildPreservesIgnoredSourceDeclarations() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-build-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const packageRoot = await mkdtemp(join(tempRootBase, "build-ignored-declarations-"));
+
+  try {
+    const srcRoot = join(packageRoot, "src");
+    const outRoot = join(packageRoot, "dist");
+    await mkdir(srcRoot, { recursive: true });
+    await mkdir(outRoot, { recursive: true });
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "dx-styles-ignored-declarations-fixture",
+        private: true,
+        type: "module",
+        sharedLibBuild: { ignoredSourceFiles: ["src/contract.ts", "src/contract.js"] },
+      }),
+    );
+    await writeFile(join(srcRoot, "index.ts"), 'export { value } from "./contract.js";');
+    const source = 'export const value = "contract";';
+    const declaration = 'export declare const value = "contract";';
+    await writeFile(join(srcRoot, "contract.ts"), source);
+    await writeFile(join(srcRoot, "contract.js"), source);
+    await writeFile(join(outRoot, "contract.d.ts"), declaration);
+    await writeFile(join(outRoot, "orphan.d.ts"), "export declare const orphan: string;");
+
+    runSharedLibraryBuild(packageRoot);
+    runSharedLibraryBuild(packageRoot);
+    assert.equal(await readFile(join(outRoot, "contract.d.ts"), "utf8"), declaration);
+    assert.equal(existsSync(join(outRoot, "contract.js")), true);
+    assert.equal(existsSync(join(outRoot, "orphan.d.ts")), false);
+
+    await rm(join(srcRoot, "contract.ts"));
+    await rm(join(srcRoot, "contract.js"));
+    await writeFile(join(srcRoot, "index.ts"), 'export const value = "plain";');
+    runSharedLibraryBuild(packageRoot);
+    assert.equal(existsSync(join(outRoot, "contract.d.ts")), false);
+    assert.equal(existsSync(join(outRoot, "contract.js")), false);
+  } finally {
+    await rm(packageRoot, { force: true, recursive: true });
+  }
+}
+
 async function main() {
   testRuntimeHelpers();
   testRuntimeKeyframes();
@@ -4984,6 +5028,7 @@ async function main() {
   await testDiagnosticsTransform();
   await testDiagnosticsDoNotRequireMetadataOutput();
   await testDiagnosticsRespectRtlMarkers();
+  await testSharedLibraryBuildPreservesIgnoredSourceDeclarations();
   await testSharedLibraryBuildExtractsDirectDxStylesImports();
   await testSharedLibraryBuildAllowsOrdinaryLocalClassExports();
   await testSharedLibraryBuildSkipsNonTaggedDxStylesImports();
