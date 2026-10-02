@@ -486,6 +486,11 @@ export async function pruneOrphanedArtifacts(
   const artifactSuffixes = options.includeDeclarations
     ? sourceArtifactSuffixes
     : buildArtifactSuffixes;
+  // Excluding a JS entry point does not invalidate its source declaration.
+  const declarationSources = options.includeDeclarations ? await collectSources(srcRoot) : [];
+  const declarationArtifactBases = new Set(
+    declarationSources.map((sourcePath) => getSourceArtifactBase(sourcePath, srcRoot)),
+  );
   const existingFiles = await collectFiles(outRoot);
 
   await Promise.all(
@@ -502,7 +507,9 @@ export async function pruneOrphanedArtifacts(
       if (
         artifactBase === null ||
         validArtifactBases.has(artifactBase) ||
-        options.preservedArtifacts?.has(artifactPath) === true
+        options.preservedArtifacts?.has(artifactPath) === true ||
+        (declarationArtifactSuffixes.some((suffix) => artifactPath.endsWith(suffix)) &&
+          declarationArtifactBases.has(artifactBase))
       ) {
         return;
       }
