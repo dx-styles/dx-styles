@@ -98,6 +98,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
 pre { background: #0d1019; border: 1px solid #1c2233; border-radius: 10px; padding: 16px; overflow-x: auto; }
 pre code { background: none; padding: 0; }
 blockquote { margin: 0; padding-left: 16px; border-left: 3px solid #2a3350; color: #9aa3c0; }
+article table { border-collapse: collapse; margin: 24px 0; font-size: 15px; }
+article th, article td { padding: 6px 16px 6px 0; border-bottom: 1px solid #1c2233; color: #cdd3e6; vertical-align: top; }
+article th { color: #f4f6ff; font-weight: 600; border-bottom-color: #2a3350; }
+article th:not([align]) { text-align: left; }
+article th:last-child, article td:last-child { padding-right: 0; }
+article figure { margin: 24px 0; }
+@media (max-width: 600px) {
+  article table { display: block; overflow-x: auto; }
+}
 .post-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 28px; }
 .post-list h2 { margin: 0 0 4px; font-size: 22px; }
 .post-list a { text-decoration: none; color: #f4f6ff; }
