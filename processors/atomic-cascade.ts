@@ -9,6 +9,14 @@
  * they pick a different winner, or when the atomic model cannot pick one.
  */
 import { propertiesOverlap, readLonghandDepth } from "./atomic-properties.js";
+import {
+  findClosingToken,
+  type SelectorToken,
+  serializeTokens,
+  splitTokenList,
+  tokenizeSelector,
+  unescapeCss,
+} from "./atomic-selector.js";
 
 export type Specificity = readonly [number, number, number];
 
@@ -20,6 +28,8 @@ export interface CascadeDeclaration {
   readonly important: boolean;
   /** The atom key: the property and the condition. */
   readonly key: string;
+  /** The properties the atom emits after the vendor prefixer, the property itself included. */
+  readonly properties: readonly string[];
   readonly property: string;
   /** One complex selector relative to the styled element, which is `&`. */
   readonly selector: string;
@@ -39,7 +49,8 @@ export interface CascadePart {
 }
 
 interface SimpleSelector {
-  readonly argument?: string;
+  /** Tokens inside the brackets of an attribute or a functional pseudo-class. */
+  readonly argument?: readonly SelectorToken[];
   readonly kind:
     | "amp"
     | "attribute"
@@ -80,76 +91,9 @@ const conditionalAtRules = new Set([
   "@supports",
 ]);
 
-function findClosing(source: string, start: number, open: string, close: string): number {
-  let depth = 0;
-  let quote: null | string = null;
-
-  for (let index = start; index < source.length; index += 1) {
-    const character = source[index];
-
-    if (character === "\\") {
-      index += 1;
-    } else if (quote !== null) {
-      if (character === quote) {
-        quote = null;
-      }
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === open) {
-      depth += 1;
-    } else if (character === close) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-
-  throw new Error(`dx-styles atomic output cannot parse the selector "${source}".`);
-}
-
 /** Splits a selector list on its top-level commas. */
-export function splitSelectorList(source: string): string[] {
-  const items: string[] = [];
-  let start = 0;
-
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-
-    if (character === "\\") {
-      index += 1;
-    } else if (character === "(") {
-      index = findClosing(source, index, "(", ")");
-    } else if (character === "[") {
-      index = findClosing(source, index, "[", "]");
-    } else if (character === '"' || character === "'") {
-      index = source.indexOf(character, index + 1);
-    } else if (character === ",") {
-      items.push(source.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-
-  items.push(source.slice(start).trim());
-  return items.filter((item) => item.length > 0);
-}
-
-function readIdentifier(source: string, start: number): number {
-  let index = start;
-
-  while (index < source.length) {
-    const character = source[index];
-
-    if (character === "\\") {
-      index += 2;
-    } else if (/[\w-]/u.test(character) || character.charCodeAt(0) > 127) {
-      index += 1;
-    } else {
-      break;
-    }
-  }
-
-  return index;
+function splitSelectorList(tokens: readonly SelectorToken[]): string[] {
+  return splitTokenList(tokens).map(serializeTokens);
 }
 
 // Pure results, cached per process: a recipe compares every pair of its declarations.
@@ -162,80 +106,61 @@ function parseComplexSelector(source: string): ComplexSelector {
     return cached;
   }
 
-  const parsed = parseComplexSelectorText(source);
+  const parsed = parseComplexSelectorTokens(source, tokenizeSelector(source));
   parsedSelectors.set(source, parsed);
   return parsed;
 }
 
-function parseComplexSelectorText(source: string): ComplexSelector {
+function parseComplexSelectorTokens(
+  source: string,
+  tokens: readonly SelectorToken[],
+): ComplexSelector {
   const compounds: SimpleSelector[][] = [[]];
+  const fail = () => new Error(`dx-styles atomic output cannot parse the selector "${source}".`);
   let index = 0;
 
   const current = () => compounds[compounds.length - 1];
-  const startCompound = () => {
-    if (current().length > 0) {
-      compounds.push([]);
-    }
+  const push = (kind: SimpleSelector["kind"], name: string, end: number, argument?: readonly SelectorToken[]) => {
+    current().push({ argument, kind, name, raw: serializeTokens(tokens.slice(index, end)) });
+    index = end;
   };
 
-  while (index < source.length) {
-    const character = source[index];
+  while (index < tokens.length) {
+    const { kind, text } = tokens[index];
+    const next = tokens[index + 1];
 
-    if (/\s/u.test(character) || character === ">" || character === "+" || character === "~") {
-      startCompound();
-      index += 1;
-    } else if (character === "&") {
-      current().push({ kind: "amp", name: "&", raw: "&" });
-      index += 1;
-    } else if (character === "*") {
-      current().push({ kind: "universal", name: "*", raw: "*" });
-      index += 1;
-    } else if (character === "." || character === "#") {
-      const end = readIdentifier(source, index + 1);
-      current().push({
-        kind: character === "." ? "class" : "id",
-        name: source.slice(index + 1, end),
-        raw: source.slice(index, end),
-      });
-      index = end;
-    } else if (character === "[") {
-      const end = findClosing(source, index, "[", "]");
-      const raw = source.slice(index, end + 1);
-      current().push({ argument: raw.slice(1, -1), kind: "attribute", name: raw, raw });
-      index = end + 1;
-    } else if (character === ":") {
-      const isElement = source[index + 1] === ":";
-      const nameStart = index + (isElement ? 2 : 1);
-      const nameEnd = readIdentifier(source, nameStart);
-      const name = source.slice(nameStart, nameEnd).toLowerCase();
-      let end = nameEnd;
-      let argument: string | undefined;
-
-      if (source[nameEnd] === "(") {
-        end = findClosing(source, nameEnd, "(", ")") + 1;
-        argument = source.slice(nameEnd + 1, end - 1);
+    if (kind === "whitespace" || (kind === "delim" && /^[>+~]$/u.test(text))) {
+      if (current().length > 0) {
+        compounds.push([]);
       }
-
-      current().push({
-        argument,
-        kind: isElement || legacyPseudoElements.has(name) ? "pseudo-element" : "pseudo-class",
+      index += 1;
+    } else if (kind === "delim" && (text === "&" || text === "*")) {
+      push(text === "&" ? "amp" : "universal", text, index + 1);
+    } else if (kind === "delim" && (text === "." || text === "#") && next?.kind === "word") {
+      push(text === "." ? "class" : "id", unescapeCss(next.text), index + 2);
+    } else if (kind === "open" && text === "[") {
+      const end = findClosingToken(tokens, index);
+      push("attribute", serializeTokens(tokens.slice(index, end)), end, tokens.slice(index + 1, end - 1));
+    } else if (kind === "delim" && text === ":") {
+      const isElement = next?.kind === "delim" && next.text === ":";
+      const nameToken = tokens[index + (isElement ? 2 : 1)];
+      if (nameToken?.kind !== "word") {
+        throw fail();
+      }
+      const name = unescapeCss(nameToken.text).toLowerCase();
+      const nameEnd = index + (isElement ? 3 : 2);
+      const hasArgument = tokens[nameEnd]?.kind === "open" && tokens[nameEnd].text === "(";
+      const end = hasArgument ? findClosingToken(tokens, nameEnd) : nameEnd;
+      push(
+        isElement || legacyPseudoElements.has(name) ? "pseudo-element" : "pseudo-class",
         name,
-        raw: source.slice(index, end),
-      });
-      index = end;
+        end,
+        hasArgument ? tokens.slice(nameEnd + 1, end - 1) : undefined,
+      );
+    } else if (kind === "word") {
+      push("type", unescapeCss(text).toLowerCase(), index + 1);
     } else {
-      const end = readIdentifier(source, index);
-
-      if (end === index) {
-        throw new Error(`dx-styles atomic output cannot parse the selector "${source}".`);
-      }
-
-      current().push({
-        kind: "type",
-        name: source.slice(index, end).toLowerCase(),
-        raw: source.slice(index, end),
-      });
-      index = end;
+      throw fail();
     }
   }
 
@@ -277,7 +202,7 @@ function readSimpleSpecificity(simple: SimpleSelector, ampSpecificity: Specifici
       break;
   }
 
-  const argument = simple.argument ?? "";
+  const argument = simple.argument ?? [];
 
   if (simple.name === "where") {
     return [0, 0, 0];
@@ -289,19 +214,29 @@ function readSimpleSpecificity(simple: SimpleSelector, ampSpecificity: Specifici
     simple.name === "has" ||
     simple.name === "global"
   ) {
+    // A relative selector of :has() starts with a combinator.
     return maxSpecificity(
-      splitSelectorList(argument).map((item) => item.replace(/^[>+~]\s*/u, "")),
+      splitTokenList(argument).map((item) =>
+        serializeTokens(item).replace(/^[>+~]/u, "").trim(),
+      ),
       ampSpecificity,
     );
   }
 
-  const ofSelector = /^(?:nth-child|nth-last-child)$/u.test(simple.name)
-    ? /\sof\s(.+)$/su.exec(argument)?.[1]
-    : undefined;
+  const of = argument.findIndex(
+    (token) =>
+      token.kind === "word" &&
+      token.text.toLowerCase() === "of" &&
+      token.depth === argument[0].depth &&
+      (simple.name === "nth-child" || simple.name === "nth-last-child"),
+  );
 
-  return ofSelector === undefined
+  return of < 0
     ? [0, 1, 0]
-    : addSpecificity([0, 1, 0], maxSpecificity(splitSelectorList(ofSelector), ampSpecificity));
+    : addSpecificity(
+        [0, 1, 0],
+        maxSpecificity(splitSelectorList(argument.slice(of + 1)), ampSpecificity),
+      );
 }
 
 /** Specificity of a complex selector (Selectors Level 4, §16), `&` counting as given. */
@@ -495,50 +430,43 @@ interface AttributeValue {
   readonly value: string;
 }
 
-const MAX_CODE_POINT = 0x10ffff;
-
-/** Resolves the escapes of a CSS string or identifier (CSS Syntax 3, §4.3.7). */
-function unescapeCss(text: string): string {
-  return text.replace(
-    /\\(?:([\da-f]{1,6})(?:\r\n|[\t\n\f\r ])?|(\r\n|[\n\f\r])|([\s\S]))/giu,
-    (_match, hex: string | undefined, newline: string | undefined, other: string | undefined) => {
-      if (hex !== undefined) {
-        const codePoint = Number.parseInt(hex, 16);
-        return codePoint === 0 ||
-          (codePoint >= 0xd800 && codePoint <= 0xdfff) ||
-          codePoint > MAX_CODE_POINT
-          ? "\ufffd"
-          : String.fromCodePoint(codePoint);
-      }
-
-      return newline === undefined ? (other ?? "") : "";
-    },
+/** `[name=value]` or `[name=value i|s]`; other attribute selectors give null. */
+function readEqualityAttribute(
+  argument: readonly SelectorToken[],
+): null | readonly [string, AttributeValue] {
+  const [name, operator, value, flag, ...rest] = argument.filter(
+    (token) => token.kind !== "whitespace",
   );
+
+  if (
+    name?.kind !== "word" ||
+    operator?.kind !== "delim" ||
+    operator.text !== "=" ||
+    (value?.kind !== "word" && value?.kind !== "string") ||
+    (flag !== undefined && (flag.kind !== "word" || !/^[is]$/iu.test(flag.text))) ||
+    rest.length > 0
+  ) {
+    return null;
+  }
+
+  const attribute = unescapeCss(name.text).toLowerCase();
+  const modifier = flag?.text.toLowerCase();
+  // HTML matches the values of some attributes (`type`, `lang`, ...)
+  // case-insensitively; `data-*` attributes and the `s` flag never do.
+  const caseSensitive =
+    modifier === "s" || (modifier === undefined && attribute.startsWith("data-"));
+  const text = value.kind === "string" ? value.text.slice(1, -1) : value.text;
+  return [attribute, { caseSensitive, value: unescapeCss(text) }];
 }
 
-const ATTRIBUTE_EQUALITY_PATTERN =
-  /^\s*([\w-]+)\s*=\s*(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)'|((?:[^\s"'\\]|\\[\s\S])+))\s*(?:([is])\s*)?$/iu;
-
 function readEqualityAttributes(compound: readonly SimpleSelector[]): Map<string, AttributeValue> {
-  const attributes = new Map<string, AttributeValue>();
-
-  compound.forEach((simple) => {
-    const match = ATTRIBUTE_EQUALITY_PATTERN.exec(simple.argument ?? "");
-
-    if (simple.kind === "attribute" && match !== null) {
-      const name = match[1].toLowerCase();
-      const flag = match[5]?.toLowerCase();
-      // HTML matches the values of some attributes (`type`, `lang`, ...)
-      // case-insensitively; `data-*` attributes and the `s` flag never do.
-      const caseSensitive = flag === "s" || (flag === undefined && name.startsWith("data-"));
-      attributes.set(name, {
-        caseSensitive,
-        value: unescapeCss(match[2] ?? match[3] ?? match[4]),
-      });
-    }
-  });
-
-  return attributes;
+  return new Map(
+    compound.flatMap((simple) => {
+      const attribute =
+        simple.kind === "attribute" ? readEqualityAttribute(simple.argument ?? []) : null;
+      return attribute === null ? [] : [attribute];
+    }),
+  );
 }
 
 function areAttributeValuesDifferent(left: AttributeValue, right: AttributeValue): boolean {
@@ -551,7 +479,7 @@ function readNegations(compound: readonly SimpleSelector[]): Set<string> {
   return new Set(
     compound.flatMap((simple) =>
       simple.kind === "pseudo-class" && simple.name === "not"
-        ? splitSelectorList(simple.argument ?? "")
+        ? splitSelectorList(simple.argument ?? [])
         : [],
     ),
   );
@@ -755,7 +683,7 @@ export function checkAtomicCascade(
       if (
         (earlier.part === later.part && !parts[earlier.part].checkWithin) ||
         (earlier.part !== later.part && !canMeet(earlier.part, later.part)) ||
-        !propertiesOverlap(x.property, y.property) ||
+        !x.properties.some((left) => y.properties.some((right) => propertiesOverlap(left, right))) ||
         // One property with one value gives one result whichever declaration wins.
         (x.property === y.property && x.value === y.value && x.important === y.important) ||
         areConditionsIncompatible(x, y)

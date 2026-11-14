@@ -187,6 +187,7 @@ async function runWywTransform(
     readonly output?: "atomic" | "semantic";
     readonly preprocessor?: "none" | "stylis" | ((selector: string, cssText: string) => string);
     readonly classNameSlug?: string | ((hash: string, title: string) => string);
+    readonly root?: string;
   } = {},
 ) {
   const filename = isAbsolute(fixtureName)
@@ -201,7 +202,7 @@ async function runWywTransform(
         eventEmitter: options.eventEmitter,
         options: {
           filename,
-          root: process.cwd(),
+          root: options.root ?? process.cwd(),
           pluginOptions: {
             configFile: false,
             displayName: options.displayName ?? true,
@@ -5414,6 +5415,11 @@ async function testAtomicOrderErrors() {
     /"border-image: url\(\/a\.png\) 30".*"border: 1px solid red".*a longhand wins over/su,
   );
   await assertAtomicBuildFails(
+    `export const arrow = css({ markerStart: "url(#arrow)", marker: "none" });`,
+    "atomic-errors/marker.ts",
+    /"marker-start: url\(#arrow\)".*"marker: none".*a longhand wins over its shorthand/su,
+  );
+  await assertAtomicBuildFails(
     `export const text = css({ fontKerning: "none", font: "16px serif" });`,
     "atomic-errors/font-resets-kerning.ts",
     /"font-kerning: none".*"font: 16px serif".*a longhand wins over its shorthand/su,
@@ -5531,6 +5537,9 @@ async function testAtomicAllowedOrders() {
         '&[data-state="open"]': { color: "green" },
         '&[data-state="OPEN"]': { color: "red" },
       });
+      export const gapThenGrid = css({ rowGap: 8, grid: "auto / 1fr" });
+      export const gridThenGap = css({ grid: "auto / 1fr", rowGap: 8 });
+      export const markers = css({ marker: "none", markerStart: "url(#arrow)" });
     `,
     "atomic-allowed.ts",
     { output: "atomic" },
@@ -5550,6 +5559,11 @@ async function testAtomicAllowedOrders() {
   );
   assert.ok(resetSpecificity("font-kerning:none;") > resetSpecificity("font:16px serif;"));
   assert.equal(readAtoms(readExportedClassName(result.code, "allKeepsVariables")).length, 4);
+  const markers = readExportedClassName(result.code, "markers");
+  assert.ok(
+    readSpecificityOf(cssText, markers, "marker-start:url(#arrow);") >
+      readSpecificityOf(cssText, markers, "marker:none;"),
+  );
 
   await assertAtomicBuildFails(
     `export const touching = css({
@@ -5559,6 +5573,213 @@ async function testAtomicAllowedOrders() {
     "atomic-errors/touching-ranges.ts",
     /overlapping @media/u,
   );
+}
+
+async function testAtomicSelectorsReadClassesAsTokens() {
+  // The class of the style is "fixed": the same text inside a string or an
+  // escaped identifier is not that class.
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const labelled = css({
+        '&[data-label=".fixed"]': { color: "red" },
+        '&:not([title=".fixed"])': { backgroundColor: "blue" },
+        ".fixed\\\\:x &": { borderColor: "green" },
+        '&:is([data-x="a,b"]):not([title=")"])': { outlineColor: "red" },
+      });
+    `,
+    "atomic-class-tokens.ts",
+    { classNameSlug: "fixed", minifyClassNames: true, output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const labelled = readExportedClassName(result.code, "labelled");
+  const selectorOf = (declaration: string) =>
+    readSelectorOf(cssText, readAtomFor(cssText, labelled, declaration));
+
+  assert.deepEqual(labelled.split(" "), readAtoms(labelled));
+  assert.match(selectorOf("color:red;"), /^(?:\.dx-[\w-]+)+\[data-label="\.fixed"\]$/u);
+  assert.match(selectorOf("background-color:blue;"), /^(?:\.dx-[\w-]+)+:not\(\[title="\.fixed"\]\)$/u);
+  assert.match(selectorOf("border-color:green;"), /^\.fixed\\:x (?:\.dx-[\w-]+)+$/u);
+  assert.match(
+    selectorOf("outline-color:red;"),
+    /^(?:\.dx-[\w-]+)+:is\(\[data-x="a,b"\]\):not\(\[title="\)"\]\)$/u,
+  );
+}
+
+async function testAtomicFallbackArrayIsOneAtom() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const sized = css({ width: ["100px", "50vw"] });
+    `,
+    "atomic-fallbacks.ts",
+    { output: "atomic" },
+  );
+  const sized = readExportedClassName(result.code, "sized");
+
+  assert.equal(readAtoms(sized).length, 1, sized);
+  assert.deepEqual(readRulesOf(result.cssText ?? "", readAtoms(sized)[0]), [
+    `.${readAtoms(sized)[0]}{width:100px;width:50vw;}`,
+  ]);
+}
+
+async function testAtomicRelativeUrlsDependOnTheBuildRoot() {
+  const source = `
+    import { css } from "dx-styles";
+    export const image = css({ backgroundImage: "url(./a.png)" });
+  `;
+  const atomFor = async (root: string) => {
+    const result = await runWywTransform(source, `${root}/src/styles.ts`, {
+      output: "atomic",
+      root,
+    });
+    return readAtoms(readExportedClassName(result.code, "image"))[0];
+  };
+  const fixtures = join(process.cwd(), "src/__tests__/fixtures/atomic-roots");
+
+  assert.notEqual(await atomFor(join(fixtures, "a")), await atomFor(join(fixtures, "b")));
+}
+
+async function testAtomicVendorPrefixesMatchTheSemanticModel() {
+  // Stylis prefixes grid-row-start and grid-row-end by their neighbours, which
+  // an atom alone does not have.
+  await assertAtomicBuildFails(
+    `export const cell = css({ gridRowStart: 2, gridRowEnd: 4 });`,
+    "atomic-errors/grid-neighbours.ts",
+    /grid-neighbours\.ts: css\(\) "cell" sets "grid-row-start: 2" next to "grid-row-end".*vendor prefixes.*set them with their shorthand/su,
+  );
+  const source = `
+    import { css } from "dx-styles";
+    export const cell = css({ gridRow: "2 / 4", gridColumnStart: 1 });
+  `;
+  const semantic = await runWywTransform(source, "atomic-prefixes.ts");
+  const atomic = await runWywTransform(source, "atomic-prefixes.ts", { output: "atomic" });
+  const declarations = (cssText: string) =>
+    Array.from(cssText.matchAll(/[\w-]+:[^;{}]+;/gu), ([declaration]) => declaration).sort();
+  assert.deepEqual(declarations(atomic.cssText ?? ""), declarations(semantic.cssText ?? ""));
+
+  // The prefixer turns user-select into -webkit-user-select too.
+  for (const style of [
+    `{ WebkitUserSelect: "text", userSelect: "none" }`,
+    `{ userSelect: "none", WebkitUserSelect: "text" }`,
+  ]) {
+    await assertAtomicBuildFails(
+      `export const text = css(${style});`,
+      "atomic-errors/prefixed-overlap.ts",
+      /"-webkit-user-select" and "user-select" have no order rule|"user-select" and "-webkit-user-select" have no order rule/su,
+    );
+  }
+}
+
+// Each shorthand and the properties it sets or resets, by its specification;
+// the flow-relative ones meet the physical ones in some writing mode.
+const SHORTHAND_FAMILIES = [
+  "animation: animation-name animation-duration animation-timing-function animation-delay animation-iteration-count animation-direction animation-fill-mode animation-play-state animation-timeline animation-composition animation-range",
+  "animation-range: animation-range-start animation-range-end",
+  "background: background-image background-position background-size background-repeat background-origin background-clip background-attachment background-color",
+  "background-position: background-position-x background-position-y",
+  "border: border-width border-style border-color border-image",
+  "border-image: border-image-source border-image-slice border-image-width border-image-outset border-image-repeat",
+  "border-radius: border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius border-start-start-radius border-start-end-radius border-end-start-radius border-end-end-radius",
+  "caret: caret-color caret-animation caret-shape",
+  "column-rule: column-rule-width column-rule-style column-rule-color",
+  "columns: column-width column-count column-height",
+  "contain-intrinsic-size: contain-intrinsic-width contain-intrinsic-height contain-intrinsic-block-size contain-intrinsic-inline-size",
+  "container: container-name container-type",
+  "corner-shape: corner-top-shape corner-bottom-shape",
+  "corner-top-shape: corner-top-left-shape corner-top-right-shape",
+  "corner-bottom-shape: corner-bottom-left-shape corner-bottom-right-shape",
+  "flex: flex-grow flex-shrink flex-basis",
+  "flex-flow: flex-direction flex-wrap",
+  "font: font-style font-variant font-weight font-width font-size line-height font-family font-feature-settings font-kerning font-language-override font-optical-sizing font-size-adjust font-variation-settings",
+  "font-synthesis: font-synthesis-weight font-synthesis-style font-synthesis-small-caps font-synthesis-position",
+  "font-variant: font-variant-alternates font-variant-caps font-variant-east-asian font-variant-emoji font-variant-ligatures font-variant-numeric font-variant-position",
+  "gap: row-gap column-gap",
+  "grid: grid-template-rows grid-template-columns grid-template-areas grid-auto-rows grid-auto-columns grid-auto-flow",
+  "grid-area: grid-row grid-column",
+  "grid-column: grid-column-start grid-column-end",
+  "grid-row: grid-row-start grid-row-end",
+  "grid-template: grid-template-rows grid-template-columns grid-template-areas",
+  "line-clamp: max-lines block-ellipsis continue",
+  "list-style: list-style-image list-style-position list-style-type",
+  "marker: marker-start marker-mid marker-end",
+  "mask: mask-image mask-mode mask-repeat mask-position mask-clip mask-origin mask-size mask-composite mask-border",
+  "mask-border: mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode",
+  "offset: offset-position offset-path offset-distance offset-anchor offset-rotate",
+  "outline: outline-width outline-style outline-color",
+  "overflow: overflow-x overflow-y overflow-block overflow-inline",
+  "overscroll-behavior: overscroll-behavior-x overscroll-behavior-y overscroll-behavior-block overscroll-behavior-inline",
+  "place-content: align-content justify-content",
+  "place-items: align-items justify-items",
+  "place-self: align-self justify-self",
+  "position-try: position-try-order position-try-fallbacks",
+  "scroll-timeline: scroll-timeline-name scroll-timeline-axis",
+  "text-align: text-align-all text-align-last",
+  "text-box: text-box-trim text-box-edge",
+  "text-decoration: text-decoration-line text-decoration-style text-decoration-color text-decoration-thickness",
+  "text-emphasis: text-emphasis-style text-emphasis-color",
+  "text-wrap: text-wrap-mode text-wrap-style",
+  "transition: transition-property transition-duration transition-timing-function transition-delay transition-behavior",
+  "vertical-align: alignment-baseline baseline-source baseline-shift",
+  "view-timeline: view-timeline-name view-timeline-axis view-timeline-inset",
+  "white-space: white-space-collapse text-wrap-mode white-space-trim",
+  ...["margin", "padding", "scroll-margin", "scroll-padding", "inset"].flatMap((box) => {
+    const side = box === "inset" ? "" : `${box}-`;
+    return [
+      `${box}: ${side}top ${side}right ${side}bottom ${side}left ${box}-block ${box}-inline`,
+      `${box}-block: ${box}-block-start ${box}-block-end`,
+      `${box}-inline: ${box}-inline-start ${box}-inline-end`,
+    ];
+  }),
+  ...["width", "style", "color"].flatMap((part) => [
+    `border-${part}: border-top-${part} border-right-${part} border-bottom-${part} border-left-${part} border-block-${part} border-inline-${part}`,
+    `border-block-${part}: border-block-start-${part} border-block-end-${part}`,
+    `border-inline-${part}: border-inline-start-${part} border-inline-end-${part}`,
+  ]),
+  ...["top", "right", "bottom", "left", "block", "inline", "block-start", "block-end", "inline-start", "inline-end"].map(
+    (side) => `border-${side}: border-${side}-width border-${side}-style border-${side}-color`,
+  ),
+].map((line) => line.split(/:? /u));
+
+async function testAtomicShorthandFamilies() {
+  const members = new Map(SHORTHAND_FAMILIES.map(([shorthand, ...rest]) => [shorthand, rest]));
+  const longhandsOf = (property: string): string[] =>
+    members.get(property)?.flatMap(longhandsOf) ?? [property];
+  const build = (name: string, declarations: readonly (readonly [string, string])[]) =>
+    runWywTransform(
+      `import { css } from "dx-styles";\nexport const s = css(${JSON.stringify(Object.fromEntries(declarations))});`,
+      `atomic-families/${name}.ts`,
+      { output: "atomic" },
+    );
+  const isFlowRelative = (property: string) =>
+    /\b(?:block|inline)\b|-(?:start|end)-(?:start|end)-/u.test(property);
+  // A flow-relative property meets the physical ones of its box in some writing mode.
+  const boxOf = (property: string) =>
+    property.replace(/\b(?:top|right|bottom|left|block|inline|start|end|x|y|width|height)\b|-/gu, "") ||
+    "inset";
+  // Physical longhands that never meet one another (and no -end next to its -start).
+  const independent = [...new Set([...members.keys()].flatMap(longhandsOf))].filter(
+    (longhand) => !isFlowRelative(longhand) && !/^grid-(?:row|column)-end$/u.test(longhand),
+  );
+
+  for (const [shorthand] of members) {
+    const family = new Set(longhandsOf(shorthand));
+    // A longhand before its shorthand: the semantic model applies the shorthand.
+    for (const longhand of family) {
+      await assert.rejects(
+        build(shorthand, [[longhand, "a"], [shorthand, "b"]]),
+        /a longhand wins over its shorthand|have no order rule/u,
+        `${longhand} before ${shorthand}`,
+      );
+    }
+    // Properties outside the family never meet the shorthand.
+    const boxes = new Set([...family].filter(isFlowRelative).map(boxOf));
+    const outside = independent.filter(
+      (property) => !family.has(property) && !boxes.has(boxOf(property)),
+    );
+    await build(shorthand, [...outside.map((property) => [property, "a"] as const), [shorthand, "b"]]);
+  }
 }
 
 function readRuntimeDefinitionArgument(code: string, factory: string): unknown {
@@ -5961,6 +6182,11 @@ async function main() {
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicAllowedOrders();
+  await testAtomicSelectorsReadClassesAsTokens();
+  await testAtomicFallbackArrayIsOneAtom();
+  await testAtomicRelativeUrlsDependOnTheBuildRoot();
+  await testAtomicVendorPrefixesMatchTheSemanticModel();
+  await testAtomicShorthandFamilies();
   await testAtomicRecipesKeepTheLastAtomPerKey();
   await testAtomicStyleHandlesComposeByKey();
   await testAtomicStyleLabel();

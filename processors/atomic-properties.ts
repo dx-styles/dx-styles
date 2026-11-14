@@ -10,18 +10,21 @@
  *
  * `SHORTHAND_SUBPROPERTIES` lists the direct sub-properties of each shorthand.
  * It merges the shorthand table of @linaria/atomic (MIT) with the `computed`
- * field of the shorthands in mdn-data (css/properties.json), the shorthands
- * mdn-data marks "asSpecified" (from their specifications), and links the
- * flow-relative box shorthands (`padding-inline`, ...) to the physical box
- * shorthand of their family and the side shorthands (`border-top`, ...) to
- * `border`. A shorthand also lists the properties it resets but cannot set
+ * field of the shorthands in mdn-data 2.37.2 (css/properties.json), the
+ * shorthands mdn-data marks "asSpecified" or leaves out, from their
+ * specifications (`marker` of SVG 2, `text-box` and `vertical-align` of CSS
+ * Inline 3, `line-clamp` of CSS Overflow 4, `text-align` of CSS Text 4), and
+ * follows the specifications where mdn-data lags: `grid` does not reset the
+ * gaps (CSS Grid 2, §7.8). It also links the flow-relative box shorthands
+ * (`padding-inline`, ...) to the physical box shorthand of their family and the
+ * side shorthands (`border-top`, ...) to `border`. A shorthand also lists the properties it resets but cannot set
  * (its reset-only sub-properties): `border` resets `border-image` (CSS
  * Cascade 5, §3), `font` resets `font-kerning` and the other "reset
  * implicitly" properties (CSS Fonts 4, §2.7), `mask` resets `mask-border`, and
  * `animation` resets `animation-composition` and `animation-range`.
  *
  * `PROPERTY_ALIASES` maps a legacy name to the property it sets
- * (`word-wrap` to `overflow-wrap`).
+ * (`word-wrap` to `overflow-wrap`, `scroll-snap-margin` to `scroll-margin`).
  */
 const BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";
 // The first character of a table code is one of the first 35 digits: `z` starts
@@ -234,7 +237,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "gap": ["row-gap", "column-gap"],
   "grid": [
     "grid-template-rows", "grid-template-columns", "grid-template-areas", "grid-auto-rows",
-    "grid-auto-columns", "grid-auto-flow", "column-gap", "row-gap",
+    "grid-auto-columns", "grid-auto-flow",
   ],
   "grid-area": ["grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"],
   "grid-column": ["grid-column-start", "grid-column-end"],
@@ -244,12 +247,14 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "inset-block": ["inset-block-start", "inset-block-end"],
   "inset-inline": ["inset-inline-start", "inset-inline-end"],
   "interest-delay": ["interest-delay-start", "interest-delay-end"],
+  "line-clamp": ["max-lines", "block-ellipsis", "continue"],
   "list-style": ["list-style-image", "list-style-position", "list-style-type"],
   "margin": [
     "margin-bottom", "margin-left", "margin-right", "margin-top", "margin-block", "margin-inline",
   ],
   "margin-block": ["margin-block-start", "margin-block-end"],
   "margin-inline": ["margin-inline-start", "margin-inline-end"],
+  "marker": ["marker-start", "marker-mid", "marker-end"],
   "mask": [
     "mask-image", "mask-mode", "mask-repeat", "mask-position", "mask-clip", "mask-origin",
     "mask-size", "mask-composite", "mask-border",
@@ -285,6 +290,8 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "scroll-padding-block": ["scroll-padding-block-start", "scroll-padding-block-end"],
   "scroll-padding-inline": ["scroll-padding-inline-start", "scroll-padding-inline-end"],
   "scroll-timeline": ["scroll-timeline-name", "scroll-timeline-axis"],
+  "text-align": ["text-align-all", "text-align-last"],
+  "text-box": ["text-box-trim", "text-box-edge"],
   "text-decoration": [
     "text-decoration-line", "text-decoration-style", "text-decoration-color",
     "text-decoration-thickness",
@@ -305,8 +312,9 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
     "transition-delay", "transition-duration", "transition-property", "transition-timing-function",
     "transition-behavior",
   ],
+  "vertical-align": ["alignment-baseline", "baseline-source", "baseline-shift"],
   "view-timeline": ["view-timeline-name", "view-timeline-axis", "view-timeline-inset"],
-  "white-space": ["text-wrap-mode", "white-space-collapse"],
+  "white-space": ["text-wrap-mode", "white-space-collapse", "white-space-trim"],
 };
 
 /** Legacy names and the property each one sets. */
@@ -318,6 +326,11 @@ export const PROPERTY_ALIASES: Readonly<Record<string, string>> = {
   "page-break-after": "break-after",
   "page-break-before": "break-before",
   "page-break-inside": "break-inside",
+  "scroll-snap-margin": "scroll-margin",
+  "scroll-snap-margin-bottom": "scroll-margin-bottom",
+  "scroll-snap-margin-left": "scroll-margin-left",
+  "scroll-snap-margin-right": "scroll-margin-right",
+  "scroll-snap-margin-top": "scroll-margin-top",
   "word-wrap": "overflow-wrap",
 };
 
@@ -344,18 +357,25 @@ export function readPropertyCode(property: string): null | string {
   return propertyCodes.get(property) ?? null;
 }
 
-function resolveAlias(property: string): string {
-  return Object.hasOwn(PROPERTY_ALIASES, property) ? PROPERTY_ALIASES[property] : property;
+const VENDOR_PREFIX_PATTERN = /^-(?:webkit|moz|ms|o)-/u;
+
+/**
+ * The standard name of a property. A vendor-prefixed property counts as the
+ * property it prefixes: browsers treat many of them as its alias.
+ */
+function resolveProperty(property: string): string {
+  const standard = property.replace(VENDOR_PREFIX_PATTERN, "");
+  return Object.hasOwn(PROPERTY_ALIASES, standard) ? PROPERTY_ALIASES[standard] : standard;
 }
 
 /**
  * 0 for a shorthand or a property outside any family, 1 for a shorthand that is
  * part of another shorthand (`border-top`, `border-color`), 2 for a longhand of
- * a family (`border-top-color`, `padding-top`). An alias has the depth of the
- * property it sets.
+ * a family (`border-top-color`, `padding-top`). An alias or a vendor-prefixed
+ * property has the depth of the property it sets.
  */
 export function readLonghandDepth(property: string): LonghandDepth {
-  const resolved = resolveAlias(property);
+  const resolved = resolveProperty(property);
 
   if (!shorthandParents.has(resolved)) {
     return 0;
@@ -365,7 +385,7 @@ export function readLonghandDepth(property: string): LonghandDepth {
 }
 
 function collectLonghands(property: string, into: Set<string>): Set<string> {
-  const resolved = resolveAlias(property);
+  const resolved = resolveProperty(property);
   const subProperties = Object.hasOwn(SHORTHAND_SUBPROPERTIES, resolved)
     ? SHORTHAND_SUBPROPERTIES[resolved]
     : undefined;

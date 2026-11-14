@@ -6,7 +6,7 @@ import {
   type ValueCache,
 } from "@wyw-in-js/processor-utils";
 import { type ExpressionValue, type ICSSRule, ValueType } from "@wyw-in-js/shared";
-import { dirname, relative } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 import {
   cloneStyleObject,
@@ -1122,8 +1122,10 @@ export function createAtomicStylePart(request: AtomicStylePartRequest): AtomicSt
         cssText: toCSSStyle(style),
         displayName: request.displayName,
         location: request.location,
-        moduleDirectory: dirname(readModuleFile(request.context)),
-        place: request.place,
+        // The absolute directory: the same relative path under two build roots
+        // names two different resources.
+        moduleDirectory: dirname(resolve(request.context.filename ?? "unknown")),
+        place: `${readModuleFile(request.context)}: ${request.place}`,
       })
     : emptyAtomizedStyle;
   // Each argument keeps its own part: the build of a handle checked the pairs

@@ -11,7 +11,16 @@
 import { createHash } from "node:crypto";
 
 import type { ICSSRule } from "@wyw-in-js/shared";
-import { compile, type Element, KEYFRAMES, RULESET, serialize, stringify, tokenize } from "stylis";
+import {
+  compile,
+  type Element,
+  KEYFRAMES,
+  prefix,
+  RULESET,
+  serialize,
+  stringify,
+  tokenize,
+} from "stylis";
 
 import {
   type CascadeDeclaration,
@@ -20,6 +29,12 @@ import {
   readSelectorSpecificity,
 } from "./atomic-cascade.js";
 import { readPropertyCode } from "./atomic-properties.js";
+import {
+  findClassTokens,
+  normalizeSelectorText,
+  serializeTokens,
+  tokenizeSelector,
+} from "./atomic-selector.js";
 
 type SourceLocation = {
   readonly start?: ICSSRule["start"];
@@ -117,44 +132,6 @@ function hasRelativeUrl(value: string): boolean {
   );
 }
 
-/**
- * Collapses whitespace where it is only syntax; a quoted string and an escaped
- * character keep theirs (`[data-label="a  b"]`, `.a\\ b`).
- */
-function normalizeWhitespace(value: string): string {
-  let result = "";
-  let quote: null | string = null;
-  let pendingSpace = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-
-    if (quote === null && /\s/u.test(char)) {
-      pendingSpace = result.length > 0;
-      continue;
-    }
-
-    if (pendingSpace) {
-      result += " ";
-      pendingSpace = false;
-    }
-
-    if (char === "\\") {
-      result += value.slice(index, index + 2);
-      index += 1;
-    } else {
-      if (quote === null && (char === '"' || char === "'")) {
-        quote = char;
-      } else if (char === quote) {
-        quote = null;
-      }
-      result += char;
-    }
-  }
-
-  return result;
-}
-
 // The :global() rule of the WyW stylis preprocessor, which the semantic model
 // goes through (`stylisGlobalPlugin` of @wyw-in-js/transform, not exported).
 // The atomizer needs the selector it produces to tell a rule that selects the
@@ -212,34 +189,18 @@ function resolveGlobalSelector(element: Element, selector: string): string {
   ].join("");
 }
 
-/**
- * Replaces the `&` that stands for the styled element. An `&` inside a quoted
- * string (`[data-label="&"]`) or after a backslash is text and stays.
- */
+/** Replaces the `&` that stands for the styled element; an `&` in a string is text. */
 function replaceStyleMarker(selector: string, replacement: string): string {
-  let quote: null | string = null;
+  const tokens = tokenizeSelector(selector);
+  const index = tokens.findIndex((token) => token.kind === "delim" && token.text === "&");
 
-  for (let index = 0; index < selector.length; index += 1) {
-    const char = selector[index];
-
-    if (char === "\\") {
-      index += 1;
-    } else if (quote !== null) {
-      if (char === quote) {
-        quote = null;
-      }
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === "&") {
-      return `${selector.slice(0, index)}${replacement}${selector.slice(index + 1)}`;
-    }
+  if (index < 0) {
+    throw new Error(`dx-styles atomic output cannot find the styled element in "${selector}".`);
   }
 
-  throw new Error(`dx-styles atomic output cannot find the styled element in "${selector}".`);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[$()*+.?[\\\]^{|}]/gu, "\\$&");
+  return [...tokens.slice(0, index), { ...tokens[index], text: replacement }, ...tokens.slice(index + 1)]
+    .map((token) => token.text)
+    .join("");
 }
 
 function registerKeyCode(code: string, meaning: string, kind: string): void {
@@ -361,8 +322,11 @@ function readDeclaration(name: string, value: string): readonly [string, string]
 
 interface DeclarationGroup {
   readonly atRules: readonly string[];
+  /** The declarations of the group as stylis parsed them, and all declarations of their rule. */
+  readonly elements: Element[];
   readonly property: string;
   readonly selectors: readonly string[];
+  readonly siblings: readonly Element[];
   readonly values: string[];
 }
 
@@ -373,7 +337,7 @@ interface PassthroughRule {
 }
 
 interface CollectedStyle {
-  readonly classPattern: RegExp;
+  readonly className: string;
   /** Rules whose :global() selector leaves the element of the style out. */
   readonly globalRules: string[];
   readonly groups: DeclarationGroup[];
@@ -396,7 +360,7 @@ function collectDeclarationGroups(
 
       (element.props as string[]).forEach((selector) => {
         const resolved = resolveGlobalSelector(element, selector);
-        if (resolved === selector || style.classPattern.test(resolved)) {
+        if (resolved === selector || readTopLevelClassTokens(resolved, style.className).length > 0) {
           selectors.push(resolved);
         } else {
           globalSelectors.push(selector);
@@ -422,14 +386,17 @@ function collectDeclarationGroups(
         const [property, value] = readDeclaration(String(child.props), child.children);
 
         if (current?.property === property) {
+          current.elements.push(child);
           current.values.push(value);
           return;
         }
 
         current = {
           atRules,
+          elements: [child],
           property,
           selectors,
+          siblings: element.children as Element[],
           values: [value],
         };
         groups.push(current);
@@ -445,14 +412,14 @@ function collectDeclarationGroups(
 
     if (UNSUPPORTED_AT_RULES.has(atRuleName)) {
       throw new Error(
-        `dx-styles atomic output: ${place} uses "${normalizeWhitespace(element.value)}". The atomic output cannot express ${atRuleName} inside a style object, because atoms are shared between styles. Move this rule to a regular stylesheet, or build with output: "semantic".`,
+        `dx-styles atomic output: ${place} uses "${normalizeSelectorText(element.value)}". The atomic output cannot express ${atRuleName} inside a style object, because atoms are shared between styles. Move this rule to a regular stylesheet, or build with output: "semantic".`,
       );
     }
 
     if (element.type !== KEYFRAMES && isConditionalAtRule(atRuleName)) {
       collectDeclarationGroups(
         element.children as Element[],
-        [...atRules, normalizeWhitespace(element.value)],
+        [...atRules, normalizeSelectorText(element.value)],
         style,
       );
       return;
@@ -489,23 +456,76 @@ function scopeAnimationReferences(
     .join("");
 }
 
-function readClassPattern(className: string): RegExp {
-  return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`, "gu");
+function readTopLevelClassTokens(selector: string, className: string): number[] {
+  const tokens = tokenizeSelector(selector);
+  return findClassTokens(tokens, className).filter((index) => tokens[index].depth === 0);
 }
 
+/**
+ * Puts `&` in place of the last class of the style outside brackets, the styled
+ * element; any other reference to that class stays and needs the class.
+ */
 function toRelativeSelector(selector: string, className: string): readonly [string, boolean] {
-  const matches = [...selector.matchAll(readClassPattern(className))];
-  const last = matches[matches.length - 1];
+  const tokens = tokenizeSelector(selector);
+  const index = readTopLevelClassTokens(selector, className).at(-1);
 
-  if (last === undefined) {
+  if (index === undefined) {
     throw new Error(
       `dx-styles atomic output cannot place the selector "${selector}" relative to its style.`,
     );
   }
 
-  const index = last.index;
-  const relative = `${selector.slice(0, index)}&${selector.slice(index + last[0].length)}`;
-  return [normalizeWhitespace(relative), matches.length > 1];
+  const relative = serializeTokens([
+    ...tokens.slice(0, index),
+    { ...tokens[index], kind: "delim", text: "&" },
+    ...tokens.slice(index + 2),
+  ]);
+  return [relative, findClassTokens(tokens, className).length > 1];
+}
+
+// The stylis prefixer gets the declarations of the rule around a declaration
+// (`prefixer` of stylis 4 passes them on); its type leaves that argument out.
+const prefixAmong = prefix as unknown as (
+  value: string,
+  length: number,
+  siblings: readonly Element[],
+) => string;
+
+function prefixAll(elements: readonly Element[], siblings: readonly Element[]): string {
+  return elements.map((element) => prefixAmong(element.value, element.length, siblings)).join("");
+}
+
+/**
+ * The properties that the WyW preprocessor emits for an atom once the stylis
+ * prefixer has run. Fails when the semantic model prefixes the declarations
+ * differently because of their neighbours in the rule, which an atom lacks.
+ */
+function readEmittedProperties(
+  group: DeclarationGroup,
+  declarationText: string,
+  place: string,
+): string[] {
+  const alone = prefixAll(group.elements, group.elements);
+  const inRule = prefixAll(group.elements, group.siblings);
+
+  if (alone !== inRule) {
+    const neighbours = group.siblings
+      .filter(
+        (sibling) =>
+          sibling.type === "decl" &&
+          !group.elements.includes(sibling) &&
+          prefixAll(group.elements, [...group.elements, sibling]) !== alone,
+      )
+      .map((sibling) => String(sibling.props));
+    throw new Error(
+      `dx-styles atomic output: ${place} sets "${group.property}: ${group.values.join(", ")}" next to "${neighbours.join('", "')}", and the vendor prefixes it gets there ("${inRule}") differ from those of an atom alone ("${alone}"). To fix it, set them with their shorthand (for example grid-row instead of grid-row-start and grid-row-end).`,
+    );
+  }
+
+  const atomElements = (compile(`a{${declarationText}}`)[0]?.children ?? []) as Element[];
+  const emitted = (compile(`a{${prefixAll(atomElements, atomElements)}}`)[0]?.children ??
+    []) as Element[];
+  return [...new Set(emitted.map((element) => readDeclaration(String(element.props), "")[0]))];
 }
 
 function wrapInAtRules(atRules: readonly string[], cssText: string): string {
@@ -516,7 +536,7 @@ function wrapInAtRules(atRules: readonly string[], cssText: string): string {
 export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
   const elements = compile(`.${input.className}{${input.cssText}}`);
   const collected: CollectedStyle = {
-    classPattern: new RegExp(readClassPattern(input.className).source, "u"),
+    className: input.className,
     globalRules: [],
     groups: [],
     passthrough: [],
@@ -551,6 +571,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     const key = `${readPropertyKeyCode(group.property)}${readConditionKeyCode(group.atRules, relativeSelectors)}`;
     const name = `dx-${key}_${valueCode}`;
     const declarationText = values.map((value) => `${group.property}:${value};`).join("");
+    const properties = readEmittedProperties(group, declarationText, input.place);
     const repeatCounts = relativeSelectors.map((selector) =>
       readAtomRepeatCount(group.property, group.atRules, selector),
     );
@@ -568,6 +589,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
       atomicSpecificity: readSelectorSpecificity(selector, [0, repeatCounts[index], 0]),
       important,
       key,
+      properties,
       property: group.property,
       selector,
       semanticSpecificity: readSelectorSpecificity(selector, [0, 1, 0]),

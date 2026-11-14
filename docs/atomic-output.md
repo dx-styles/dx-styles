@@ -197,6 +197,14 @@ Any other pair counts as able to meet, except two different pseudo-elements. The
 conservative: it can fail on selectors that never match one element in practice; rewrite them
 into one of the forms above, or set the property under one condition.
 
+**Vendor prefixes.** Atoms go through the same stylis prefixer, one atom at a time. The check
+compares the properties each atom emits after prefixing, so `-webkit-user-select` next to
+`userSelect` (which also emits `-webkit-user-select`) is a pair with no order rule; a vendor
+property also counts as the property it prefixes. Stylis prefixes `grid-row-start` and
+`grid-row-end` (and the `grid-column` pair) by each other when they share a rule, which an atom
+alone cannot do, so that pair fails the build: set them with their shorthand,
+`gridRow: "2 / 4"`.
+
 **`@layer` and `@scope` inside a style.** Atoms are shared between styles, so the atomic model
 cannot express a layer order or a scope proximity. Move such rules to a regular stylesheet, or
 build in the semantic model.
@@ -240,9 +248,10 @@ The atom name is `dx-<P><C>_<V>`, in lowercase base36:
   characters of hash for a property outside it (custom properties, vendor properties, new ones);
 - `C`, the condition code: empty without a condition, otherwise seven characters of hash of the
   at-rules and the selector;
-- `V`, the value code: eight characters of hash of the values and `!important` (and of the module
-  directory, for a relative `url()`: `url(./a.png)` or `url(icon.svg)`, but not `url(/a.png)`,
-  `url(#id)` or a URL with a scheme).
+- `V`, the value code: eight characters of hash of the values and `!important` (and of the
+  absolute module directory, for a relative `url()`: `url(./a.png)` or `url(icon.svg)`, but not
+  `url(/a.png)`, `url(#id)` or a URL with a scheme). An atom with a relative `url()` therefore
+  differs between checkouts in different directories.
 
 `cx` matches `^dx-(?:[0-9a-y][0-9a-z]|z[0-9a-z]{7})(?:[0-9a-z]{7})?_[0-9a-z]{8}$`. The name does
 not depend on the file, `displayName`, `minifyClassNames` or the build mode, so atoms of a
