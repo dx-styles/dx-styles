@@ -1064,6 +1064,40 @@ function testRuntimeHelpers() {
   }, /slotRecipe\(\) compound variant #0 css references unknown slot "body"/u);
 }
 
+function testCxKeepsLastAtomPerKey() {
+  const tokensOf = (className: string) => className.split(" ").sort();
+
+  // Literal atoms of the documented shape `dx-<key>_<value>`: keys `0a` and `0b`
+  // are table property codes, `0a1234567` adds a condition code, `z1234567` is a
+  // hashed property code.
+  assert.deepEqual(
+    tokensOf(cx("dx-0a_aaaaaaaa dx-0b_bbbbbbbb", "dx-0a_cccccccc")),
+    ["dx-0a_cccccccc", "dx-0b_bbbbbbbb"],
+  );
+  assert.deepEqual(
+    tokensOf(cx("dx-0a_aaaaaaaa", "dx-0a1234567_bbbbbbbb", "dx-z1234567_cccccccc")),
+    ["dx-0a1234567_bbbbbbbb", "dx-0a_aaaaaaaa", "dx-z1234567_cccccccc"],
+  );
+  assert.deepEqual(
+    tokensOf(cx("dx-z1234567_aaaaaaaa", "dx-z1234567abcdefg_bbbbbbbb", "dx-z1234567_cccccccc")),
+    ["dx-z1234567_cccccccc", "dx-z1234567abcdefg_bbbbbbbb"],
+  );
+  assert.equal(cx("dx-0a_aaaaaaaa", "dx-0a_aaaaaaaa"), "dx-0a_aaaaaaaa");
+
+  // Class names of the semantic model sit next to atoms and are never dropped.
+  assert.deepEqual(tokensOf(cx("button_abc dx-0a_aaaaaaaa", "button_abc dx-0a_cccccccc")), [
+    "button_abc",
+    "dx-0a_cccccccc",
+  ]);
+  assert.equal(cx("a b", "b c", false, null, undefined), "a b c");
+
+  // Tokens that only look close to an atom are ordinary class names.
+  assert.equal(cx("dx-0a_short", "dx-0a_other"), "dx-0a_short dx-0a_other");
+  assert.equal(cx("dx-za_aaaaaaaa", "dx-za_bbbbbbbb"), "dx-za_aaaaaaaa dx-za_bbbbbbbb");
+  assert.equal(cx("dx-0A_aaaaaaaa", "dx-0A_bbbbbbbb"), "dx-0A_aaaaaaaa dx-0A_bbbbbbbb");
+  assert.equal(cx("dx-0a12_aaaaaaaa", "dx-0a12_bbbbbbbb"), "dx-0a12_aaaaaaaa dx-0a12_bbbbbbbb");
+}
+
 function testRuntimeKeyframes() {
   const name = keyframes({
     from: { opacity: 0, transform: "rotate(0deg)" },
@@ -4968,6 +5002,7 @@ async function testSharedLibraryBuildPreservesIgnoredSourceDeclarations() {
 
 async function main() {
   testRuntimeHelpers();
+  testCxKeepsLastAtomPerKey();
   testRuntimeKeyframes();
   testRuntimeStyleHandles();
   testRecipePropSplitting();

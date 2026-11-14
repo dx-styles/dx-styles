@@ -9,6 +9,7 @@
         "@wyw-in-js/shared": "^2.7.1",
         "@wyw-in-js/transform": "^2.7.1",
         "csstype": "^3.2.3",
+        "stylis": "^4.3.0",
       },
       "devDependencies": {
         "@changesets/changelog-github": "^0.7.0",
@@ -20,6 +21,7 @@
         "@types/node": "25.9.1",
         "@types/react": "19.2.5",
         "@types/react-dom": "19.2.3",
+        "@types/stylis": "^4.2.7",
         "@vitejs/plugin-react": "6.0.2",
         "@wyw-in-js/vite": "^2.7.1",
         "browserslist": "4.29.3",
@@ -387,6 +389,8 @@
     "@types/react": ["@types/react@19.2.5", "", { "dependencies": { "csstype": "^3.0.2" } }, "sha512-keKxkZMqnDicuvFoJbzrhbtdLSPhj/rZThDlKWCDbgXmUg0rEUFtRssDXKYmtXluZlIqiC5VqkCgRwzuyLHKHw=="],
 
     "@types/react-dom": ["@types/react-dom@19.2.3", "", { "peerDependencies": { "@types/react": "^19.2.0" } }, "sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ=="],
+
+    "@types/stylis": ["@types/stylis@4.2.7", "", {}, "sha512-VgDNokpBoKF+wrdvhAAfS55OMQpL6QRglwTwNC3kIgBrzZxA4WsFj+2eLfEA/uMUDzBcEhYmjSbwQakn/i3ajA=="],
 
     "@types/unist": ["@types/unist@3.0.3", "", {}, "sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q=="],
 

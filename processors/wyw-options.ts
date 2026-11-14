@@ -15,6 +15,13 @@ export interface DxStylesProcessorOptions {
    * instead of the verbose length-prefixed hex segments. Off by default.
    */
   readonly minifyClassNames?: boolean;
+  /**
+   * Output model of the processors. `"semantic"` (the default) emits one class
+   * per style. `"atomic"` emits one shared class per declaration (an atom) and
+   * fails the build when a style's result would depend on declaration order;
+   * see docs/atomic-output.md.
+   */
+  readonly output?: "semantic" | "atomic";
 }
 
 // `WywInJsProcessorOptions` (@wyw-in-js/shared, since 2.1) is WyW's documented

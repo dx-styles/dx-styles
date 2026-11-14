@@ -62,7 +62,8 @@
     "@wyw-in-js/processor-utils": "^2.7.1",
     "@wyw-in-js/shared": "^2.7.1",
     "@wyw-in-js/transform": "^2.7.1",
-    "csstype": "^3.2.3"
+    "csstype": "^3.2.3",
+    "stylis": "^4.3.0"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
@@ -74,6 +75,7 @@
     "@types/node": "25.9.1",
     "@types/react": "19.2.5",
     "@types/react-dom": "19.2.3",
+    "@types/stylis": "^4.2.7",
     "@vitejs/plugin-react": "6.0.2",
     "@wyw-in-js/vite": "^2.7.1",
     "browserslist": "4.29.3",
