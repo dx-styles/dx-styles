@@ -6,6 +6,7 @@ import {
   type ValueCache,
 } from "@wyw-in-js/processor-utils";
 import { type ExpressionValue, type ICSSRule, ValueType } from "@wyw-in-js/shared";
+import { dirname, relative } from "node:path";
 
 import {
   cloneStyleObject,
@@ -30,6 +31,14 @@ import {
   type DxStylesExplainEntry,
   type DxStylesExplainPayload,
 } from "./explain-schema.js";
+import {
+  atomizeStyle,
+  ATOM_CLASS_NAME_PATTERN,
+  type AtomizedStyle,
+  composeAtomicClassNames,
+  readRegisteredAtomDeclarations,
+} from "./atomic.js";
+import { type CascadePart, checkAtomicCascade } from "./atomic-cascade.js";
 import { toCSS } from "./serialization.js";
 
 export {
@@ -1010,6 +1019,219 @@ export function shouldMinifyClassNames(options: unknown): boolean {
 
   const { dxStyles } = options.processors;
   return isPlainObject(dxStyles) && dxStyles.minifyClassNames === true;
+}
+
+export type DxStylesOutputModel = "atomic" | "semantic";
+
+function readDxStylesOptions(options: unknown): Record<string, unknown> {
+  if (!isPlainObject(options) || !isPlainObject(options.processors)) {
+    return {};
+  }
+
+  const { dxStyles } = options.processors;
+  return isPlainObject(dxStyles) ? dxStyles : {};
+}
+
+export function readOutputModel(options: unknown): DxStylesOutputModel {
+  const { output } = readDxStylesOptions(options);
+
+  if (output === undefined || output === "semantic") {
+    return "semantic";
+  }
+
+  if (output === "atomic") {
+    return "atomic";
+  }
+
+  throw new Error(
+    `dx-styles processors.dxStyles.output must be "semantic" or "atomic", got ${JSON.stringify(output)}.`,
+  );
+}
+
+/**
+ * The order check of the atomic output compares atoms with the layout stylis
+ * gives, so the WyW preprocessor that expands the atoms must be stylis too.
+ * WyW passes all plugin options to processors, `preprocessor` included, though
+ * its `IOptions` type does not declare it.
+ */
+export function assertAtomicPreprocessor(options: unknown): void {
+  const preprocessor = isPlainObject(options) ? options.preprocessor : undefined;
+
+  if (preprocessor === undefined || preprocessor === "stylis") {
+    return;
+  }
+
+  const described = typeof preprocessor === "function" ? "a function" : JSON.stringify(preprocessor);
+  throw new Error(
+    `dx-styles output: "atomic" requires the stylis preprocessor of WyW, but the WyW option preprocessor is ${described}. Remove the preprocessor option, or build with output: "semantic".`,
+  );
+}
+
+/**
+ * `cx` treats any class name of the atom shape as an atom in either model, so a
+ * class name that the WyW option `classNameSlug` turns into that shape would be
+ * dropped against real atoms.
+ */
+export function assertNotAtomShapedClassName(className: string): void {
+  if (ATOM_CLASS_NAME_PATTERN.test(className)) {
+    throw new Error(
+      `dx-styles: the WyW option classNameSlug produced the class name "${className}", which has the shape of a dx-styles atom (dx-<key>_<value>). cx would merge it with atoms; remove the "dx-" prefix or the "_" from classNameSlug.`,
+    );
+  }
+}
+
+export interface AtomicStylePartRequest {
+  /** The class of the part in the semantic model. */
+  readonly className: string;
+  readonly context: { readonly filename?: null | string; readonly root?: null | string };
+  readonly displayName: string;
+  readonly location: SourceLocation | null;
+  readonly minify: boolean;
+  readonly node?: CascadePart["node"];
+  readonly parts: readonly unknown[];
+  readonly place: string;
+}
+
+export interface AtomicStylePart {
+  readonly atoms: readonly string[];
+  /** The parts of the order check: known style handles first, then the style itself. */
+  readonly cascadeParts: readonly CascadePart[];
+  readonly className: string;
+  readonly rules: Record<string, ICSSRule>;
+}
+
+export function readModuleFile(context: AtomicStylePartRequest["context"]): string {
+  const filename = context.filename ?? "unknown";
+  return context.root ? relative(context.root, filename) : filename;
+}
+
+const emptyAtomizedStyle: AtomizedStyle = {
+  atoms: [],
+  declarations: [],
+  needsStyleClass: false,
+  rules: {},
+};
+
+/** Builds one style part (a css() result or a recipe node) in the atomic output. */
+export function createAtomicStylePart(request: AtomicStylePartRequest): AtomicStylePart {
+  const styleHandleClassNames = collectStyleHandleClassNames(request.parts);
+  const style = normalizeStyleParts(request.parts);
+  const atomized = hasStyleEntries(style)
+    ? atomizeStyle({
+        className: request.className,
+        cssText: toCSSStyle(style),
+        displayName: request.displayName,
+        location: request.location,
+        moduleDirectory: dirname(readModuleFile(request.context)),
+        place: request.place,
+      })
+    : emptyAtomizedStyle;
+  const handleDeclarations = styleHandleClassNames.flatMap(
+    (token) => readRegisteredAtomDeclarations(token) ?? [],
+  );
+  const hasLocalStyle = shouldEmitLocalStyleRule(style, styleHandleClassNames);
+  const styleClassName =
+    atomized.needsStyleClass || (hasLocalStyle && !request.minify) ? request.className : undefined;
+  const className =
+    composeAtomicClassNames(...styleHandleClassNames, styleClassName, ...atomized.atoms) ||
+    request.className;
+
+  return {
+    atoms: atomized.atoms,
+    cascadeParts: [
+      ...(handleDeclarations.length > 0
+        ? [
+            {
+              checkWithin: false,
+              declarations: handleDeclarations,
+              place: `a style handle of ${request.place}`,
+            },
+          ]
+        : []),
+      {
+        checkWithin: true,
+        declarations: atomized.declarations,
+        node: request.node,
+        place: request.place,
+      },
+    ],
+    className,
+    rules: atomized.rules,
+  };
+}
+
+export function checkAtomicStyleOrder(
+  context: AtomicStylePartRequest["context"],
+  parts: readonly CascadePart[],
+  canMeet?: (left: number, right: number) => boolean,
+): void {
+  checkAtomicCascade(readModuleFile(context), parts, canMeet);
+}
+
+export interface AtomicRecipeNode {
+  /** The class of the node in the semantic model. */
+  readonly className: string;
+  readonly displayName: string;
+  readonly matches?: Readonly<Record<string, string>>;
+  readonly node: NonNullable<CascadePart["node"]>;
+  readonly place: string;
+  readonly style: unknown;
+  readonly variant?: { readonly axis: string; readonly value: string };
+}
+
+function canRecipeNodesMeet(left: AtomicRecipeNode, right: AtomicRecipeNode): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  const leftSelection = left.variant
+    ? { [left.variant.axis]: left.variant.value }
+    : (left.matches ?? {});
+  const rightSelection = right.variant
+    ? { [right.variant.axis]: right.variant.value }
+    : (right.matches ?? {});
+
+  return Object.entries(leftSelection).every(
+    ([axis, value]) => !Object.hasOwn(rightSelection, axis) || rightSelection[axis] === value,
+  );
+}
+
+/**
+ * Builds the nodes of one recipe element (a recipe, or one slot of a slot
+ * recipe) in the atomic output, in the order of their classes: base, variants
+ * by axis, compound variants. Checks the order of every pair of nodes that can
+ * be selected together.
+ */
+export function createAtomicRecipeNodes(
+  context: AtomicStylePartRequest["context"],
+  location: SourceLocation | null,
+  minify: boolean,
+  nodes: readonly AtomicRecipeNode[],
+): { readonly parts: readonly AtomicStylePart[]; readonly rules: Record<string, ICSSRule> } {
+  const parts = nodes.map((node) =>
+    createAtomicStylePart({
+      className: node.className,
+      context,
+      displayName: node.displayName,
+      location,
+      minify,
+      node: node.node,
+      parts: [node.style],
+      place: node.place,
+    }),
+  );
+  const cascadeNodes = parts.flatMap((part, index) => part.cascadeParts.map(() => nodes[index]));
+
+  checkAtomicStyleOrder(
+    context,
+    parts.flatMap((part) => part.cascadeParts),
+    (left, right) => canRecipeNodesMeet(cascadeNodes[left], cascadeNodes[right]),
+  );
+
+  return {
+    parts,
+    rules: Object.assign({}, ...parts.map((part) => part.rules)) as Record<string, ICSSRule>,
+  };
 }
 
 export function createRecipeRuntimeDefinition(

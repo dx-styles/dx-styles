@@ -183,6 +183,9 @@ async function runWywTransform(
     readonly minifyClassNames?: boolean;
     readonly evalStrategy?: "execute" | "hybrid" | "static";
     readonly eventEmitter?: EventEmitter;
+    readonly output?: "atomic" | "semantic";
+    readonly preprocessor?: "none" | "stylis" | ((selector: string, cssText: string) => string);
+    readonly classNameSlug?: string | ((hash: string, title: string) => string);
   } = {},
 ) {
   const filename = isAbsolute(fixtureName)
@@ -207,7 +210,14 @@ async function runWywTransform(
             importOverrides: {
               "./preeval-runtime.js": { unknown: "allow" },
             },
-            processors: { dxStyles: { minifyClassNames: options.minifyClassNames ?? false } },
+            processors: {
+              dxStyles: {
+                minifyClassNames: options.minifyClassNames ?? false,
+                ...(options.output === undefined ? {} : { output: options.output }),
+              },
+            },
+            ...(options.preprocessor === undefined ? {} : { preprocessor: options.preprocessor }),
+            ...(options.classNameSlug === undefined ? {} : { classNameSlug: options.classNameSlug }),
             outputMetadata: options.outputMetadata ?? false,
             features: {
               happyDOM: false,
@@ -5000,6 +5010,383 @@ async function testSharedLibraryBuildPreservesIgnoredSourceDeclarations() {
   }
 }
 
+// The documented shape of an atom class name (docs/atomic-output.md).
+const ATOM_SHAPE = /^dx-(?:[0-9a-y][0-9a-z]|z[0-9a-z]{7})(?:[0-9a-z]{7})?_[0-9a-z]{8}$/u;
+
+function readExportedClassName(code: string, name: string): string {
+  const match = new RegExp(`export const ${name} = "([^"]*)"`, "u").exec(code);
+  assert.ok(match, code);
+  return match[1];
+}
+
+function readAtoms(className: string): string[] {
+  return className.split(" ").filter((token) => ATOM_SHAPE.test(token));
+}
+
+function readAtomKeyLength(atom: string): number {
+  return atom.slice("dx-".length, atom.indexOf("_")).length;
+}
+
+/** The innermost rules of a stylesheet whose selector names the class. */
+function readRulesOf(cssText: string, className: string): string[] {
+  return Array.from(cssText.matchAll(/([^{}]+)\{([^{}]*)\}/gu))
+    .filter(([, selector]) => new RegExp(`\\.${className}(?![\\w-])`, "u").test(selector))
+    .map(([rule]) => rule.trim());
+}
+
+function readSelectorOf(cssText: string, className: string): string {
+  const [rule] = readRulesOf(cssText, className);
+  assert.ok(rule, `no rule for ${className} in ${cssText}`);
+  return rule.slice(0, rule.indexOf("{")).trim();
+}
+
+/**
+ * Class-level specificity of a selector by the CSS definition: classes,
+ * attributes and pseudo-classes, where `:not(x)` and `:is(x)` count as their
+ * argument and `:where()` counts as nothing.
+ */
+function countClassSpecificity(selector: string): number {
+  const withoutWhere = selector.replace(/:where\([^)]*\)/gu, "");
+  const classes = withoutWhere.match(/\.[\w-]+/gu)?.length ?? 0;
+  const attributes = withoutWhere.match(/\[[^\]]*\]/gu)?.length ?? 0;
+  const pseudoClasses =
+    withoutWhere.match(/(?<!:):(?!:)(?!not\(|is\(|where\()[\w-]+/gu)?.length ?? 0;
+
+  return classes + attributes + pseudoClasses;
+}
+
+function readAtomFor(cssText: string, className: string, declaration: string): string {
+  const atom = readAtoms(className).find((candidate) =>
+    readRulesOf(cssText, candidate).some((rule) => rule.includes(`{${declaration}`)),
+  );
+  assert.ok(atom, `no atom for ${declaration} in ${className}\n${cssText}`);
+  return atom;
+}
+
+function readSpecificityOf(cssText: string, className: string, declaration: string): number {
+  return countClassSpecificity(
+    readSelectorOf(cssText, readAtomFor(cssText, className, declaration)),
+  );
+}
+
+async function testSemanticOutputIsUnchanged() {
+  const source = `
+    import { createTheme, createTokenContract, css, keyframes, recipe, slotRecipe } from "dx-styles";
+
+    const spin = keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });
+    const vars = createTokenContract({ color: { fg: null } }, { prefix: "app" });
+    export const theme = createTheme(vars, { color: { fg: "black" } });
+
+    export const base = css({
+      color: "red",
+      padding: 4,
+      animationName: spin,
+      "&:hover": { color: "blue" },
+      "@media (width >= 40rem)": { padding: 8 },
+    });
+
+    export const button = recipe({
+      base: { display: "flex" },
+      variants: { tone: { accent: { color: "green" }, muted: { color: "gray" } } },
+      compoundVariants: [{ tone: "accent", css: { fontWeight: 700 } }],
+      defaultVariants: { tone: "accent" },
+    });
+
+    export const card = slotRecipe({
+      slots: ["root", "title"],
+      base: { root: { display: "grid" }, title: { margin: 0 } },
+      variants: { size: { sm: { title: { fontSize: 12 } } } },
+    });
+  `;
+
+  for (const minifyClassNames of [false, true]) {
+    const withoutOption = await runWywTransform(source, "semantic-default.ts", { minifyClassNames });
+    const semantic = await runWywTransform(source, "semantic-default.ts", {
+      minifyClassNames,
+      output: "semantic",
+    });
+
+    assert.equal(semantic.code, withoutOption.code);
+    assert.equal(semantic.cssText, withoutOption.cssText);
+    assert.equal(ATOM_SHAPE.test(readExportedClassName(semantic.code, "base")), false);
+  }
+}
+
+async function testAtomicCssEmitsOneAtomPerDeclaration() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const first = css({ color: "red", padding: 4 });
+      export const second = css({ color: "blue" });
+      export const conditional = css({
+        "&:hover": { color: "red" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+      export const custom = css({
+        "--accent": "red",
+        "&:hover": { "--accent": "blue" },
+      });
+    `,
+    "atomic-basic/styles.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const first = readExportedClassName(result.code, "first");
+  const second = readExportedClassName(result.code, "second");
+
+  assert.equal(readAtoms(first).length, 2, first);
+  assert.equal(readAtoms(second).length, 1, second);
+  assert.ok(cssText.includes(`.${readAtomFor(cssText, first, "color:red;")}{color:red;}`), cssText);
+  assert.ok(cssText.includes(`.${readAtomFor(cssText, first, "padding:4px;")}{padding:4px;}`), cssText);
+  assert.notEqual(readAtomFor(cssText, first, "color:red;"), readAtoms(second)[0]);
+
+  // A declaration without a condition has a 2-character key, with a condition 9.
+  readAtoms(first).forEach((atom) => assert.equal(readAtomKeyLength(atom), 2, atom));
+  const conditional = readAtoms(readExportedClassName(result.code, "conditional"));
+  assert.equal(conditional.length, 2);
+  conditional.forEach((atom) => assert.equal(readAtomKeyLength(atom), 9, atom));
+  // A custom property is outside the code table: 8 characters, 15 with a condition.
+  assert.deepEqual(
+    readAtoms(readExportedClassName(result.code, "custom")).map(readAtomKeyLength).sort(),
+    [15, 8],
+  );
+
+  // No rule carries the class of a style: its declarations live in the atoms.
+  assert.equal(readRulesOf(cssText, first.split(" ")[0]).length, 0, cssText);
+  assert.match(first, /^first_\S+ /u);
+}
+
+async function testAtomicNamesDependOnlyOnTheDeclaration() {
+  const one = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const panel = css({ color: "red", backgroundImage: "url(./a.png)" });
+    `,
+    "atomic-names/one/panel.ts",
+    { output: "atomic" },
+  );
+  const two = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const otherName = css({ color: "red", backgroundImage: "url(./a.png)" });
+    `,
+    "atomic-names/two/other.ts",
+    { displayName: false, minifyClassNames: true, output: "atomic" },
+  );
+  const oneCss = one.cssText ?? "";
+  const twoCss = two.cssText ?? "";
+  const onePanel = readExportedClassName(one.code, "panel");
+  const twoPanel = readExportedClassName(two.code, "otherName");
+  const oneColor = readAtomFor(oneCss, onePanel, "color:red;");
+  const twoColor = readAtomFor(twoCss, twoPanel, "color:red;");
+
+  assert.equal(oneColor, twoColor);
+  assert.deepEqual(readRulesOf(oneCss, oneColor), readRulesOf(twoCss, twoColor));
+
+  // One relative url() in two directories names two different images.
+  const oneImage = readAtomFor(oneCss, onePanel, "background-image:");
+  const twoImage = readAtomFor(twoCss, twoPanel, "background-image:");
+  assert.notEqual(oneImage, twoImage);
+}
+
+async function testAtomicOrderRules() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const box = css({
+        color: "black",
+        padding: 0,
+        paddingTop: 4,
+        userSelect: "none",
+        "&:hover": { color: "blue" },
+        "&:focus-visible": { color: "teal" },
+        "&:active": { color: "navy" },
+        "&:disabled": { color: "gray" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+
+      export const guarded = css({
+        "&:hover:not(:disabled)": { color: "royalblue" },
+        "&:active:not(:disabled)": { color: "midnightblue" },
+      });
+
+      export const rtl = css({ $rtl: true, paddingLeft: 4 });
+    `,
+    "atomic-rules.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const box = readExportedClassName(result.code, "box");
+  const specificity = (declaration: string) => readSpecificityOf(cssText, box, declaration);
+
+  assert.ok(specificity("color:blue;") > specificity("color:black;"));
+  assert.ok(specificity("color:red;") > specificity("color:black;"));
+  assert.ok(specificity("padding-top:4px;") > specificity("padding:0;"));
+  assert.ok(specificity("color:blue;") < specificity("color:teal;"));
+  assert.ok(specificity("color:teal;") < specificity("color:navy;"));
+  assert.ok(specificity("color:navy;") < specificity("color:gray;"));
+  // A pseudo-class of the base wins over the base inside @media.
+  assert.ok(specificity("color:blue;") > specificity("color:red;"));
+
+  // `:disabled` inside `:not()` adds its specificity, not the rank of :disabled.
+  const guarded = readExportedClassName(result.code, "guarded");
+  const guardedHover = readSpecificityOf(cssText, guarded, "color:royalblue;");
+  assert.equal(guardedHover, specificity("color:blue;") + 1);
+  assert.ok(guardedHover < specificity("color:teal;"));
+  assert.ok(readSpecificityOf(cssText, guarded, "color:midnightblue;") > guardedHover);
+
+  // Atoms pass through the WyW preprocessor: prefixes and :dir(rtl) stay.
+  assert.ok(
+    readRulesOf(cssText, readAtomFor(cssText, box, "-webkit-user-select:none;")).length > 0,
+    cssText,
+  );
+  const rtl = readExportedClassName(result.code, "rtl");
+  assert.ok(
+    readAtoms(rtl).some((atom) => /:dir\(rtl\) \./u.test(readSelectorOf(cssText, atom))),
+    cssText,
+  );
+}
+
+async function assertAtomicBuildFails(source: string, fixtureName: string, message: RegExp) {
+  await assert.rejects(
+    runWywTransform(`import { css, recipe, slotRecipe } from "dx-styles";\n${source}`, fixtureName, {
+      output: "atomic",
+    }),
+    message,
+  );
+}
+
+async function testAtomicOrderErrors() {
+  await assertAtomicBuildFails(
+    `export const link = css({ "&:active": { color: "navy" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/active-before-hover.ts",
+    /atomic-errors\/active-before-hover\.ts: css\(\) "link" sets "color: navy" under "&:active".*"color: blue" under "&:hover".*pseudo-class rank decides.*reorder/su,
+  );
+  await assertAtomicBuildFails(
+    `export const box = css({ paddingTop: 4, padding: 0 });`,
+    "atomic-errors/longhand-first.ts",
+    /"padding-top: 4px".*"padding: 0".*a longhand wins over its shorthand.*reorder/su,
+  );
+  await assertAtomicBuildFails(
+    `export const grid = css({
+      "@media (min-width: 40rem)": { gap: 8 },
+      "@media (min-width: 64rem)": { gap: 16 },
+    });`,
+    "atomic-errors/overlapping-media.ts",
+    /"gap: 8px" under "@media \(min-width: ?40rem\) &".*"gap: 16px".*overlapping @media.*do not overlap/su,
+  );
+  await assertAtomicBuildFails(
+    `export const button = recipe({
+      base: { paddingTop: 4 },
+      variants: { size: { lg: { padding: 8 } } },
+    });`,
+    "atomic-errors/recipe-longhand.ts",
+    /recipe\(\) "button" base sets "padding-top: 4px".*recipe\(\) "button" variant "size\.lg" sets "padding: 8px"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const button = recipe({
+      base: { "&:disabled": { color: "gray" } },
+      variants: { tone: { accent: { "&:hover": { color: "blue" } } } },
+    });`,
+    "atomic-errors/recipe-disabled.ts",
+    /base sets "color: gray" under "&:disabled".*variant "tone\.accent" sets "color: blue" under "&:hover".*move the "&:disabled" declaration of "color" from the recipe base into each variant that sets "&:hover" on this property, after its "&:hover"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const card = slotRecipe({
+      slots: ["root", "icon"],
+      base: { icon: { "&:disabled": { color: "gray" } } },
+      variants: { tone: { accent: { icon: { "&:hover": { color: "blue" } } } } },
+    });`,
+    "atomic-errors/slot-disabled.ts",
+    /slotRecipe\(\) "card" base slot "icon" sets "color: gray".*variant "tone\.accent" slot "icon" sets "color: blue".*move the "&:disabled" declaration/su,
+  );
+  await assertAtomicBuildFails(
+    `export const frame = css({ borderTop: "1px solid", borderColor: "red" });`,
+    "atomic-errors/border-families.ts",
+    /"border-top" and "border-color" have no order rule/su,
+  );
+  await assertAtomicBuildFails(
+    `export const layered = css({ "@layer base": { color: "red" } });`,
+    "atomic-errors/layer.ts",
+    /css\(\) "layered" uses "@layer base".*Move this rule to a regular stylesheet/su,
+  );
+  await assertAtomicBuildFails(
+    `export const scoped = css({ "@scope (.card)": { color: "red" } });`,
+    "atomic-errors/scope.ts",
+    /uses "@scope \(\.card\)"/su,
+  );
+
+  for (const preprocessor of ["none", (selector: string, cssText: string) => `${selector}{${cssText}}`] as const) {
+    await assert.rejects(
+      runWywTransform(
+        `import { css } from "dx-styles";\nexport const plain = css({ color: "red" });`,
+        "atomic-errors/preprocessor.ts",
+        { output: "atomic", preprocessor },
+      ),
+      /output: "atomic" requires the stylis preprocessor of WyW, but the WyW option preprocessor is (?:"none"|a function)\. Remove the preprocessor option, or build with output: "semantic"/u,
+    );
+  }
+}
+
+async function testAtomicAllowedOrders() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      const a = css({ color: "red", margin: 0 });
+      const b = css({ color: "blue" });
+      export const composed = css(a, b);
+      export const shorthandFirst = css({ padding: 0, paddingTop: 4 });
+      export const states = css({
+        "&:hover": { color: "blue" },
+        "&:focus": { color: "teal" },
+        "&:active": { color: "navy" },
+        "&:disabled": { color: "gray" },
+      });
+      export const guarded = css({
+        "&:hover:not(:disabled)": { color: "blue" },
+        "&:active:not(:disabled)": { color: "navy" },
+        "&:disabled": { color: "gray" },
+      });
+      export const attributes = css({
+        '&[data-state="open"]': { color: "green" },
+        '&[data-state="closed"]': { color: "red" },
+      });
+      export const negation = css({
+        "&:checked": { color: "green" },
+        "&:not(:checked)": { color: "red" },
+      });
+      export const tags = css({
+        "button&": { color: "green" },
+        "a&": { color: "red" },
+      });
+      export const ranges = css({
+        "@media (width < 40rem)": { color: "green" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+    `,
+    "atomic-allowed.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const composed = readAtoms(readExportedClassName(result.code, "composed"));
+
+  assert.equal(composed.length, 2);
+  assert.ok(composed.some((atom) => readRulesOf(cssText, atom).some((rule) => rule.includes("color:blue;"))));
+  assert.equal(readAtoms(readExportedClassName(result.code, "shorthandFirst")).length, 2);
+
+  await assertAtomicBuildFails(
+    `export const touching = css({
+      "@media (max-width: 40rem)": { color: "green" },
+      "@media (min-width: 40rem)": { color: "red" },
+    });`,
+    "atomic-errors/touching-ranges.ts",
+    /overlapping @media/u,
+  );
+}
+
 async function main() {
   testRuntimeHelpers();
   testCxKeepsLastAtomPerKey();
@@ -5032,6 +5419,12 @@ async function main() {
   await testCssRtlTransformRejectsInvalidMarkers();
   await testCssTransformRejectsUnsupportedScalars();
   await testCssStaticParityMatrix();
+  await testSemanticOutputIsUnchanged();
+  await testAtomicCssEmitsOneAtomPerDeclaration();
+  await testAtomicNamesDependOnlyOnTheDeclaration();
+  await testAtomicOrderRules();
+  await testAtomicOrderErrors();
+  await testAtomicAllowedOrders();
   await testCreateVarTransform();
   await testCreateVarCrossFileStaticTransform();
   await testKeyframesTransform();

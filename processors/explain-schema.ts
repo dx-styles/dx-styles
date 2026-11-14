@@ -8,6 +8,8 @@ export interface DxStylesExplainVariantPath {
 }
 
 export interface CssExplainEntry {
+  /** Atom class names of the style in the atomic output. */
+  readonly atoms?: readonly string[];
   readonly className: string;
   readonly composeRefs: readonly string[];
   readonly kind: "css";
@@ -16,6 +18,7 @@ export interface CssExplainEntry {
 }
 
 export interface RecipeExplainEntry {
+  readonly atoms?: readonly string[];
   readonly className: string;
   readonly composeRefs: readonly string[];
   readonly kind: "recipe";
@@ -25,6 +28,7 @@ export interface RecipeExplainEntry {
 }
 
 export interface SlotRecipeExplainEntry {
+  readonly atoms?: readonly string[];
   readonly className: string;
   readonly composeRefs: readonly string[];
   readonly kind: "slotRecipe";
@@ -82,6 +86,15 @@ export function isDxStylesExplainEntry(value: unknown): value is DxStylesExplain
     typeof value.className !== "string" ||
     !Array.isArray(value.composeRefs) ||
     !value.composeRefs.every((entry) => typeof entry === "string")
+  ) {
+    return false;
+  }
+
+  if (
+    value.atoms !== undefined &&
+    (!Array.isArray(value.atoms) ||
+      !value.atoms.every((entry) => typeof entry === "string") ||
+      (value.kind !== "css" && value.kind !== "recipe" && value.kind !== "slotRecipe"))
   ) {
     return false;
   }
