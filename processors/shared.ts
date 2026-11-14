@@ -26,6 +26,7 @@ import {
   type StyleObject,
   type StylePrimitive,
 } from "../style-primitives.js";
+import { ATOM_CLASS_NAME_PATTERN, composeAtomicClassNames } from "../src/style-handle-contract.js";
 import {
   type DxStylesExplainArtifactName,
   type DxStylesExplainEntry,
@@ -33,9 +34,7 @@ import {
 } from "./explain-schema.js";
 import {
   atomizeStyle,
-  ATOM_CLASS_NAME_PATTERN,
   type AtomizedStyle,
-  composeAtomicClassNames,
   readRegisteredAtomDeclarations,
 } from "./atomic.js";
 import { type CascadePart, checkAtomicCascade } from "./atomic-cascade.js";

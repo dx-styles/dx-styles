@@ -89,10 +89,6 @@ const ANIMATION_PROPERTIES = new Set(
 );
 const UNSUPPORTED_AT_RULES = new Set(["@layer", "@scope"]);
 
-/** The shape of an atom class name; a contract between packages built with dx-styles. */
-export const ATOM_CLASS_NAME_PATTERN =
-  /^dx-((?:[0-9a-y][0-9a-z]|z[0-9a-z]{7})(?:[0-9a-z]{7})?)_[0-9a-z]{8}$/u;
-
 function hashToBase36(source: string, width: number): string {
   const digest = createHash("sha256").update(source).digest();
   let value = digest.readBigUInt64BE(0) % 36n ** BigInt(width);
@@ -253,49 +249,6 @@ function registerAtom(name: string, atom: RegisteredAtom, place: string): void {
 /** The declarations of known atoms, for the order check of style handles. */
 export function readRegisteredAtomDeclarations(name: string): null | readonly CascadeDeclaration[] {
   return atomRegistry.get(name)?.declarations ?? null;
-}
-
-export function isAtomClassName(token: string): boolean {
-  return ATOM_CLASS_NAME_PATTERN.test(token);
-}
-
-export function readAtomKey(token: string): null | string {
-  return ATOM_CLASS_NAME_PATTERN.exec(token)?.[1] ?? null;
-}
-
-/** Composes class names the way `cx` does: the last atom of a key wins. */
-export function composeAtomicClassNames(
-  ...classNames: readonly (false | null | string | undefined)[]
-): string {
-  const tokens = classNames.flatMap((token) =>
-    typeof token === "string"
-      ? token.split(/\s+/u).filter((className) => className.length > 0)
-      : [],
-  );
-  const lastAtomIndexByKey = new Map<string, number>();
-  tokens.forEach((token, index) => {
-    const key = readAtomKey(token);
-    if (key !== null) {
-      lastAtomIndexByKey.set(key, index);
-    }
-  });
-  const seen = new Set<string>();
-
-  return tokens
-    .filter((token, index) => {
-      const key = readAtomKey(token);
-      if (key !== null) {
-        return lastAtomIndexByKey.get(key) === index;
-      }
-
-      if (seen.has(token)) {
-        return false;
-      }
-
-      seen.add(token);
-      return true;
-    })
-    .join(" ");
 }
 
 /**
