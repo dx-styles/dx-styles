@@ -5319,6 +5319,15 @@ async function testAtomicOrderErrors() {
     /uses "@scope \(\.card\)"/su,
   );
 
+  await assert.rejects(
+    runWywTransform(
+      `import { css } from "dx-styles";\nexport const plain = css({ color: "red" });`,
+      "atomic-errors/unknown-output.ts",
+      { output: "atoms" as "atomic" },
+    ),
+    /processors\.dxStyles\.output must be "semantic" or "atomic", got "atoms"/u,
+  );
+
   for (const preprocessor of ["none", (selector: string, cssText: string) => `${selector}{${cssText}}`] as const) {
     await assert.rejects(
       runWywTransform(

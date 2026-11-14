@@ -399,8 +399,16 @@ function readPhysicalEquivalents(longhand: string): string[] {
   );
 }
 
+const affectedLonghands = new Map<string, Set<string>>();
+
 function collectAffectedLonghands(property: string): Set<string> {
+  const cached = affectedLonghands.get(property);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const longhands = collectLonghands(property, new Set());
+  affectedLonghands.set(property, longhands);
 
   [...longhands].forEach((longhand) => {
     readPhysicalEquivalents(longhand).forEach((physical) => longhands.add(physical));

@@ -152,7 +152,22 @@ function readIdentifier(source: string, start: number): number {
   return index;
 }
 
+// Pure results, cached per process: a recipe compares every pair of its declarations.
+const parsedSelectors = new Map<string, ComplexSelector>();
+const parsedWidthRanges = new Map<string, Map<string, WidthInterval>>();
+
 function parseComplexSelector(source: string): ComplexSelector {
+  const cached = parsedSelectors.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const parsed = parseComplexSelectorText(source);
+  parsedSelectors.set(source, parsed);
+  return parsed;
+}
+
+function parseComplexSelectorText(source: string): ComplexSelector {
   const compounds: SimpleSelector[][] = [[]];
   let index = 0;
 
@@ -431,6 +446,18 @@ function readWidthFeature(feature: string): null | readonly [string, WidthInterv
 
 /** Width ranges per unit that every `@media` of the chain requires. */
 function readWidthRanges(atRules: readonly string[]): Map<string, WidthInterval> {
+  const cacheKey = atRules.join("\u0000");
+  const cached = parsedWidthRanges.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const ranges = readWidthRangesOf(atRules);
+  parsedWidthRanges.set(cacheKey, ranges);
+  return ranges;
+}
+
+function readWidthRangesOf(atRules: readonly string[]): Map<string, WidthInterval> {
   const ranges = new Map<string, WidthInterval>();
 
   atRules.forEach((atRule) => {
