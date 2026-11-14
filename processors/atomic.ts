@@ -31,7 +31,9 @@ import {
 import { readPropertyCode } from "./atomic-properties.js";
 import {
   findClassTokens,
+  isOnlyInsideIsOrWhere,
   normalizeSelectorText,
+  type SelectorToken,
   serializeTokens,
   tokenizeSelector,
 } from "./atomic-selector.js";
@@ -313,7 +315,10 @@ function collectDeclarationGroups(
 
       (element.props as string[]).forEach((selector) => {
         const resolved = resolveGlobalSelector(element, selector);
-        if (resolved === selector || readTopLevelClassTokens(resolved, style.className).length > 0) {
+        if (
+          resolved === selector ||
+          findStyledElementToken(tokenizeSelector(resolved), style.className) !== undefined
+        ) {
           selectors.push(resolved);
         } else {
           globalSelectors.push(selector);
@@ -409,22 +414,38 @@ function scopeAnimationReferences(
     .join("");
 }
 
-function readTopLevelClassTokens(selector: string, className: string): number[] {
-  const tokens = tokenizeSelector(selector);
-  return findClassTokens(tokens, className).filter((index) => tokens[index].depth === 0);
+/**
+ * The `.` token of the class of the style that stands for the styled element:
+ * the last one outside brackets, else the last one that only `:is()` and
+ * `:where()` with one selector enclose, as in `:where(&)`.
+ */
+function findStyledElementToken(
+  tokens: readonly SelectorToken[],
+  className: string,
+): number | undefined {
+  const references = findClassTokens(tokens, className);
+
+  return (
+    references.filter((index) => tokens[index].depth === 0).at(-1) ??
+    references.filter((index) => isOnlyInsideIsOrWhere(tokens, index)).at(-1)
+  );
 }
 
 /**
- * Puts `&` in place of the last class of the style outside brackets, the styled
+ * Puts `&` in place of the class of the style that stands for the styled
  * element; any other reference to that class stays and needs the class.
  */
-function toRelativeSelector(selector: string, className: string): readonly [string, boolean] {
+function toRelativeSelector(
+  selector: string,
+  className: string,
+  place: string,
+): readonly [string, boolean] {
   const tokens = tokenizeSelector(selector);
-  const index = readTopLevelClassTokens(selector, className).at(-1);
+  const index = findStyledElementToken(tokens, className);
 
   if (index === undefined) {
     throw new Error(
-      `dx-styles atomic output cannot place the selector "${selector}" relative to its style.`,
+      `dx-styles atomic output: ${place} uses the selector "${selector}", which does not select the element of the style. An atom styles only the element of its style, and a reference to the style inside :not() or :has(), or inside :is() or :where() next to other selectors, selects other elements. Move this rule to a regular stylesheet, or build with output: "semantic".`,
     );
   }
 
@@ -507,7 +528,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
 
   groups.forEach((group) => {
     const relativeSelectors = group.selectors.map((selector) => {
-      const [relative, referencesStyleClass] = toRelativeSelector(selector, input.className);
+      const [relative, referencesStyleClass] = toRelativeSelector(selector, input.className, input.place);
       needsStyleClass ||= referencesStyleClass;
       return relative;
     });

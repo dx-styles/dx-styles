@@ -205,6 +205,13 @@ property also counts as the property it prefixes. Stylis prefixes `grid-row-star
 alone cannot do, so that pair fails the build: set them with their shorthand,
 `gridRow: "2 / 4"`.
 
+**A selector that does not select the styled element.** An atom styles only the element of its
+style. `&` inside `:is()` or `:where()` with one selector still names that element, so
+`":where(&)"` and `":is(.dark &)"` build, with the specificity they have in the semantic model,
+and `":is(&):hover"` ranks as `"&:hover"`. A reference only inside `:not()` or `:has()`, or inside
+`:is()` or `:where()` next to other selectors (`":is(&, .card)"`), selects other elements and
+fails the build. Move such rules to a regular stylesheet, or build in the semantic model.
+
 **`@layer` and `@scope` inside a style.** Atoms are shared between styles, so the atomic model
 cannot express a layer order or a scope proximity. Move such rules to a regular stylesheet, or
 build in the semantic model.

@@ -136,3 +136,43 @@ export function findClassTokens(tokens: readonly SelectorToken[], className: str
       : [];
   });
 }
+
+function isIsOrWhereOpening(tokens: readonly SelectorToken[], index: number): boolean {
+  const [before, colon, name, open] = [index - 3, index - 2, index - 1, index].map(
+    (position) => (position < 0 ? undefined : tokens[position]),
+  );
+  return (
+    open?.kind === "open" &&
+    open.text === "(" &&
+    name?.kind === "word" &&
+    /^(?:is|where)$/iu.test(unescapeCss(name.text)) &&
+    colon?.kind === "delim" &&
+    colon.text === ":" &&
+    !(before?.kind === "delim" && before.text === ":")
+  );
+}
+
+/**
+ * Whether the token is outside brackets, or inside `:is()` and `:where()` only,
+ * each with one selector (`:where(&)`, `:is(.dark &)`). There a selector
+ * matches the element of the token as it does without them (Selectors 4,
+ * §4.2 and §4.4); a token inside `:not()`, `:has()` or a list selects other
+ * elements.
+ */
+export function isOnlyInsideIsOrWhere(tokens: readonly SelectorToken[], index: number): boolean {
+  let depth = tokens[index]?.depth ?? 0;
+
+  for (let open = index - 1; open >= 0 && depth > 0; open -= 1) {
+    if (tokens[open].kind !== "open" || tokens[open].depth !== depth - 1) {
+      continue;
+    }
+
+    const argument = tokens.slice(open + 1, findClosingToken(tokens, open) - 1);
+    if (!isIsOrWhereOpening(tokens, open) || splitTokenList(argument, depth).length !== 1) {
+      return false;
+    }
+    depth -= 1;
+  }
+
+  return depth === 0;
+}

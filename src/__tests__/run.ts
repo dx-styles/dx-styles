@@ -5286,6 +5286,56 @@ async function testAtomicSelectorsMatchTheSemanticModel() {
   );
 }
 
+async function testAtomicStyleReferencesInsideIsAndWhere() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const quiet = css({ ":where(&)": { color: "red" } });
+    export const matched = css({ ":is(&)": { color: "red" } });
+    export const nested = css({ ":is(.dark :where(&))": { color: "white" } });
+    export const ordered = css({
+      color: "black",
+      ":where(&)": { color: "gray" },
+      "@media (width >= 40rem)": { color: "red" },
+      ":is(&):hover": { color: "blue" },
+    });
+  `;
+  const semanticCss = (await runWywTransform(source, "atomic-is-where.ts")).cssText ?? "";
+  const atomic = await runWywTransform(source, "atomic-is-where.ts", { output: "atomic" });
+  const atomicCss = atomic.cssText ?? "";
+  const selectorFor = (name: string, declaration: string) =>
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, name), declaration),
+    );
+
+  assert.ok(semanticCss.includes(":where(.quiet_"), semanticCss);
+  assert.match(selectorFor("quiet", "color:red;"), /^:where\((?:\.dx-[\w-]+)+\)$/u);
+  assert.equal(countClassSpecificity(selectorFor("quiet", "color:red;")), 0);
+  assert.match(selectorFor("matched", "color:red;"), /^:is\((?:\.dx-[\w-]+)+\)$/u);
+  assert.ok(countClassSpecificity(selectorFor("matched", "color:red;")) >= 1);
+  assert.match(
+    selectorFor("nested", "color:white;"),
+    /^:is\(\.dark :where\((?:\.dx-[\w-]+)+\)\)$/u,
+  );
+  assert.equal(countClassSpecificity(selectorFor("nested", "color:white;")), 1);
+
+  // The cascade of the semantic model: `:where(&)` loses to the plain style,
+  // and the pseudo-class of `:is(&):hover` belongs to the styled element.
+  const ordered = readExportedClassName(atomic.code, "ordered");
+  const specificity = (declaration: string) =>
+    readSpecificityOf(atomicCss, ordered, declaration);
+  assert.ok(specificity("color:gray;") < specificity("color:black;"));
+  assert.ok(specificity("color:blue;") > specificity("color:red;"));
+
+  // A reference that does not select the styled element still fails, with its place.
+  await assertAtomicBuildFails(
+    `export const outside = css({ ":not(&)": { color: "red" } });`,
+    "atomic-errors/not-the-style.ts",
+    /atomic-errors\/not-the-style\.ts: css\(\) "outside" uses the selector ":not\(\.outside_\w+\)".*output: "semantic"/su,
+  );
+}
+
 async function testAtomicOrderRules() {
   const result = await runWywTransform(
     `
@@ -6221,6 +6271,7 @@ async function main() {
   await testAtomicNamesDependOnlyOnTheDeclaration();
   await testAtomicCustomPropertiesKeepTheirCase();
   await testAtomicSelectorsMatchTheSemanticModel();
+  await testAtomicStyleReferencesInsideIsAndWhere();
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicAllowedOrders();

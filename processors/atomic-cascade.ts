@@ -252,10 +252,28 @@ export function readSelectorSpecificity(
     );
 }
 
+/**
+ * Whether a simple selector stands for the styled element: `&`, or `:is()` or
+ * `:where()` with one selector whose subject does, as in `:where(&)`.
+ */
+function holdsStyledElement(simple: SimpleSelector): boolean {
+  if (simple.kind === "amp") {
+    return true;
+  }
+
+  if (simple.kind !== "pseudo-class" || (simple.name !== "is" && simple.name !== "where")) {
+    return false;
+  }
+
+  const items = splitTokenList(simple.argument ?? []);
+  const subject = items.length === 1
+    ? parseComplexSelector(serializeTokens(items[0])).compounds.at(-1)
+    : undefined;
+  return subject?.some(holdsStyledElement) ?? false;
+}
+
 function findAmpCompound(selector: ComplexSelector): readonly SimpleSelector[] {
-  return (
-    selector.compounds.find((compound) => compound.some((simple) => simple.kind === "amp")) ?? []
-  );
+  return selector.compounds.find((compound) => compound.some(holdsStyledElement)) ?? [];
 }
 
 /**
