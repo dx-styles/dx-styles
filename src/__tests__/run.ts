@@ -6185,6 +6185,59 @@ async function testAtomicExplainListsAtoms() {
   assert.match(byAtom, /symbol: button/u);
 }
 
+async function testAtomicExplainFindsAtomsOfStyleHandles() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "explain-handles-"));
+
+  try {
+    const library = await runWywTransform(
+      `
+        import { css } from "dx-styles";
+        export const red = css({ color: "red" });
+      `,
+      join(fixtureRoot, "red.ts"),
+      { output: "atomic" },
+    );
+    await writeFile(join(fixtureRoot, "red.js"), library.code);
+    const [redAtom] = readAtoms(readExportedClassName(library.code, "red"));
+
+    const result = await runWywTransform(
+      `
+        import { createStyleHandle, css, recipe, slotRecipe } from "dx-styles";
+        import { red } from "./red.js";
+
+        const redHandle = createStyleHandle(red);
+
+        export const padded = css(redHandle, { padding: 4 });
+        export const button = recipe({ base: redHandle, variants: { size: { s: { padding: 2 } } } });
+        export const card = slotRecipe({
+          base: { body: { margin: 0 }, root: redHandle },
+          slots: ["root", "body"],
+        });
+      `,
+      join(fixtureRoot, "padded.ts"),
+      { output: "atomic", outputMetadata: true },
+    );
+    const { metadata } = result;
+    if (metadata == null) {
+      assert.equal(supportsWywOutputMetadata(), false);
+      return;
+    }
+
+    const padded = readExportedClassName(result.code, "padded");
+    assert.ok(readAtoms(padded).includes(redAtom), padded);
+
+    const manifest = createDxStylesExplainManifest(metadata, { source: "padded.ts" });
+    const byAtom = formatDxStylesExplainReport(manifest, [redAtom]);
+    assert.match(byAtom, /symbol: padded/u);
+    assert.match(byAtom, /symbol: button/u);
+    assert.match(byAtom, /symbol: card/u);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
 async function testAtomShapedClassNameSlugFails() {
   const source = `
     import { css } from "dx-styles";
@@ -6287,6 +6340,7 @@ async function main() {
   await testAtomicKeyframesKeepTheirConditions();
   await testAtomicGlobalAnimationSharesTheKeyOfAnimation();
   await testAtomicExplainListsAtoms();
+  await testAtomicExplainFindsAtomsOfStyleHandles();
   await testAtomShapedClassNameSlugFails();
   await testAtomRegistryRejectsCollisions();
   await testCreateVarTransform();

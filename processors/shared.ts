@@ -1092,6 +1092,7 @@ export interface AtomicStylePartRequest {
 }
 
 export interface AtomicStylePart {
+  /** The atoms of the class string, those of its style handles included. */
   readonly atoms: readonly string[];
   /** The parts of the order check: known style handles first, then the style itself. */
   readonly cascadeParts: readonly CascadePart[];
@@ -1149,7 +1150,9 @@ export function createAtomicStylePart(request: AtomicStylePartRequest): AtomicSt
     request.className;
 
   return {
-    atoms: atomized.atoms,
+    // The atoms the element gets, its style handles' included, so that explain
+    // finds every source of an atom.
+    atoms: className.split(" ").filter((token) => ATOM_CLASS_NAME_PATTERN.test(token)),
     cascadeParts: [
       ...handleParts,
       {

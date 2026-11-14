@@ -373,7 +373,8 @@ button_bhhycyd__tone-accent
 ```
 
 `bun run explain -- <manifest> <atom>` lists every style that uses the atom: an atom belongs to
-all of them, not to one source.
+all of them, not to one source. The atoms of a record are those of its class string, so a style
+that gets an atom through a style handle is listed too.
 
 ## Known limits
 
