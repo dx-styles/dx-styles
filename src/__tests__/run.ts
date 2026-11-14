@@ -65,7 +65,7 @@ import {
   DX_STYLES_DESCRIPTOR_KEY,
   STYLE_HANDLE_DESCRIPTOR_KIND,
 } from "../internal";
-import { createRuntimeRecipe, createRuntimeSlotRecipe } from "../runtime";
+import { createRuntimeRecipe } from "../runtime";
 import { keyframes as testSupportKeyframes } from "../test-support";
 
 interface PreevalRuntimeModule {
@@ -5782,24 +5782,28 @@ async function testAtomicShorthandFamilies() {
   }
 }
 
-function readRuntimeDefinitionArgument(code: string, factory: string): unknown {
-  const start = code.indexOf(`${factory}(`);
-  assert.ok(start >= 0, code);
-  let depth = 0;
-  const open = start + factory.length;
+/** Imports a transformed module, resolving `dx-styles` to this package as a consumer does. */
+async function importTransformedModule(code: string, name: string): Promise<unknown> {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const moduleRoot = await mkdtemp(join(tempRootBase, `${name}-`));
 
-  for (let index = open; index < code.length; index += 1) {
-    if (code[index] === "(") {
-      depth += 1;
-    } else if (code[index] === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return evaluateInNewContext(`(${code.slice(open + 1, index)})`);
-      }
-    }
+  try {
+    const modulePath = join(moduleRoot, `${name}.js`);
+    await writeFile(modulePath, code);
+    return await import(pathToFileURL(modulePath).href);
+  } finally {
+    await rm(moduleRoot, { force: true, recursive: true });
   }
+}
 
-  throw new Error(`no ${factory} call in ${code}`);
+interface AtomicRecipesModule {
+  readonly button: (selection?: Record<string, string>) => string;
+  readonly card: (selection?: Record<string, string>) => Record<"root" | "title", string>;
+}
+
+function isAtomicRecipesModule(value: unknown): value is AtomicRecipesModule {
+  return isRecord(value) && typeof value.button === "function" && typeof value.card === "function";
 }
 
 function readAtomDeclarations(cssText: string, className: string): string[] {
@@ -5841,9 +5845,9 @@ async function testAtomicRecipesKeepTheLastAtomPerKey() {
     { output: "atomic" },
   );
   const cssText = result.cssText ?? "";
-  const buttonDefinition = readRuntimeDefinitionArgument(result.code, "createRuntimeRecipe");
-  assert.ok(isRuntimeRecipeDefinitionForTest(buttonDefinition));
-  const button = createRuntimeRecipe(buttonDefinition);
+  const moduleNamespace = await importTransformedModule(result.code, "atomic-recipes");
+  assert.ok(isAtomicRecipesModule(moduleNamespace));
+  const { button, card } = moduleNamespace;
 
   assert.deepEqual(readAtomDeclarations(cssText, button()), ["color:black;", "padding:4px;"]);
   assert.deepEqual(readAtomDeclarations(cssText, button({ tone: "accent" })), [
@@ -5855,10 +5859,6 @@ async function testAtomicRecipesKeepTheLastAtomPerKey() {
     "padding:8px;",
   ]);
 
-  const cardDefinition = readRuntimeDefinitionArgument(result.code, "createRuntimeSlotRecipe");
-  const card = createRuntimeSlotRecipe(
-    cardDefinition as Parameters<typeof createRuntimeSlotRecipe>[0],
-  );
   assert.deepEqual(readAtomDeclarations(cssText, card().title), ["color:black;"]);
   assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).title), ["color:blue;"]);
   assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).root), ["margin:0;"]);
