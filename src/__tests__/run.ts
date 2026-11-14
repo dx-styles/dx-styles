@@ -5241,6 +5241,10 @@ async function testAtomicSelectorsMatchTheSemanticModel() {
       "& :global(.dark)": { color: "white" },
     });
     export const labelled = css({ '&[data-label="a  b"]': { color: "teal" } });
+    export const ampersand = css({
+      "&:hover": { color: "blue" },
+      '[data-label="&"] &:hover': { color: "red" },
+    });
   `;
   const semantic = await runWywTransform(source, "atomic-selectors.ts");
   const atomic = await runWywTransform(source, "atomic-selectors.ts", { output: "atomic" });
@@ -5261,6 +5265,17 @@ async function testAtomicSelectorsMatchTheSemanticModel() {
       readAtomFor(atomicCss, readExportedClassName(atomic.code, "labelled"), "color:teal;"),
     ),
     /\[data-label="a {2}b"\]$/u,
+  );
+  // An ampersand inside an attribute value is text, not the styled element.
+  const ampersand = readExportedClassName(atomic.code, "ampersand");
+  const ampersandSelector = readSelectorOf(
+    atomicCss,
+    readAtomFor(atomicCss, ampersand, "color:red;"),
+  );
+  assert.match(ampersandSelector, /^\[data-label="&"\] (?:\.dx-[\w-]+)+:hover$/u);
+  assert.equal(
+    countClassSpecificity(ampersandSelector),
+    readSpecificityOf(atomicCss, ampersand, "color:blue;") + 1,
   );
 }
 
@@ -5392,6 +5407,34 @@ async function testAtomicOrderErrors() {
     "atomic-errors/vertical-side.ts",
     /"padding-inline-start" and "padding-top" have no order rule/su,
   );
+  // A shorthand also resets the properties it cannot set: border resets border-image.
+  await assertAtomicBuildFails(
+    `export const framed = css({ borderImage: "url(/a.png) 30", border: "1px solid red" });`,
+    "atomic-errors/border-resets-image.ts",
+    /"border-image: url\(\/a\.png\) 30".*"border: 1px solid red".*a longhand wins over/su,
+  );
+  await assertAtomicBuildFails(
+    `export const text = css({ fontKerning: "none", font: "16px serif" });`,
+    "atomic-errors/font-resets-kerning.ts",
+    /"font-kerning: none".*"font: 16px serif".*a longhand wins over its shorthand/su,
+  );
+  // Two spellings of one attribute value are one condition.
+  await assertAtomicBuildFails(
+    `export const escaped = css({
+      '&[data-state="open"]': { color: "red" },
+      '&[data-state="\\\\6f pen"]': { color: "blue" },
+    });`,
+    "atomic-errors/attribute-escape.ts",
+    /"color: red" under "&\[data-state="open"\]".*"color: blue".*no order rule/su,
+  );
+  await assertAtomicBuildFails(
+    `export const typed = css({
+      '&[type="text"]': { color: "red" },
+      '&[type="TEXT"]': { color: "blue" },
+    });`,
+    "atomic-errors/attribute-case.ts",
+    /"color: red" under "&\[type="text"\]".*"color: blue".*no order rule/su,
+  );
   await assertAtomicBuildFails(
     `export const layered = css({ "@layer base": { color: "red" } });`,
     "atomic-errors/layer.ts",
@@ -5468,6 +5511,26 @@ async function testAtomicAllowedOrders() {
         "@media (40rem <= width < 64rem)": { gap: 8 },
         "@media (width >= 64rem)": { gap: 16 },
       });
+      export const resets = css({
+        border: "1px solid red",
+        borderImage: "url(/a.png) 30",
+        font: "16px serif",
+        fontKerning: "none",
+      });
+      export const logicalAxes = css({ paddingInline: 8, paddingBlock: 4 });
+      export const logicalSides = css({ marginInlineStart: 8, marginInlineEnd: 4 });
+      export const logicalSizes = css({ inlineSize: 8, blockSize: 4 });
+      export const logicalCorners = css({ borderStartStartRadius: 2, borderEndEndRadius: 4 });
+      export const allKeepsVariables = css({
+        "--accent": "red",
+        all: "initial",
+        direction: "rtl",
+        unicodeBidi: "isolate",
+      });
+      export const attributeCase = css({
+        '&[data-state="open"]': { color: "green" },
+        '&[data-state="OPEN"]': { color: "red" },
+      });
     `,
     "atomic-allowed.ts",
     { output: "atomic" },
@@ -5478,6 +5541,15 @@ async function testAtomicAllowedOrders() {
   assert.equal(composed.length, 2);
   assert.ok(composed.some((atom) => readRulesOf(cssText, atom).some((rule) => rule.includes("color:blue;"))));
   assert.equal(readAtoms(readExportedClassName(result.code, "shorthandFirst")).length, 2);
+  // A reset-only sub-property after its shorthand wins by the longhand rule.
+  const resets = readExportedClassName(result.code, "resets");
+  const resetSpecificity = (declaration: string) =>
+    readSpecificityOf(cssText, resets, declaration);
+  assert.ok(
+    resetSpecificity("border-image:url(/a.png) 30;") > resetSpecificity("border:1px solid red;"),
+  );
+  assert.ok(resetSpecificity("font-kerning:none;") > resetSpecificity("font:16px serif;"));
+  assert.equal(readAtoms(readExportedClassName(result.code, "allKeepsVariables")).length, 4);
 
   await assertAtomicBuildFails(
     `export const touching = css({
@@ -5698,6 +5770,66 @@ async function testAtomicInlineKeyframesMatchTheSemanticModel() {
   );
 }
 
+async function testAtomicKeyframesKeepTheirConditions() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const wave = css({
+      animation: "wave 1s infinite",
+      "@media (width > 40rem)": {
+        "@keyframes :global(wave)": { from: { opacity: 0 }, to: { opacity: 1 } },
+      },
+    });
+    export const pulse = css({
+      animation: "pulse 1s infinite",
+      "@supports (opacity: 0)": {
+        "@keyframes pulse": { from: { opacity: 0 }, to: { opacity: 1 } },
+      },
+    });
+  `;
+  const semantic = await runWywTransform(source, "atomic-keyframes-conditions.ts");
+  const atomic = await runWywTransform(source, "atomic-keyframes-conditions.ts", {
+    output: "atomic",
+  });
+  const semanticCss = semantic.cssText ?? "";
+  const atomicCss = atomic.cssText ?? "";
+  const media = "@media (width > 40rem){@-webkit-keyframes wave{";
+
+  assert.ok(semanticCss.includes(media), semanticCss);
+  assert.ok(atomicCss.includes(media), atomicCss);
+  assert.equal(atomicCss.match(/@keyframes wave\{/gu)?.length, 1, atomicCss);
+
+  const pulseClass = readExportedClassName(semantic.code, "pulse");
+  const supports = `@supports (opacity: 0){@-webkit-keyframes pulse-${pulseClass}{`;
+  assert.ok(semanticCss.includes(supports), semanticCss);
+  assert.ok(atomicCss.includes(supports), atomicCss);
+  assert.ok(
+    atomicCss.includes(`animation:pulse-${pulseClass} 1s infinite;`) ===
+      semanticCss.includes(`animation:pulse-${pulseClass} 1s infinite;`),
+    `${semanticCss}\n${atomicCss}`,
+  );
+}
+
+async function testAtomicGlobalAnimationSharesTheKeyOfAnimation() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const spinning = css({ animation: ":global(spin) 1s" });
+      export const still = css({ animation: "none" });
+    `,
+    "atomic-global-animation.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const spinning = readExportedClassName(result.code, "spinning");
+  const still = readExportedClassName(result.code, "still");
+
+  assert.deepEqual(readAtomDeclarations(cssText, spinning), ["animation:spin 1s;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, cx(spinning, still)), ["animation:none;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, cx(still, spinning)), ["animation:spin 1s;"]);
+}
+
 async function testAtomicExplainListsAtoms() {
   const result = await runWywTransform(
     `
@@ -5833,6 +5965,8 @@ async function main() {
   await testAtomicStyleHandlesComposeByKey();
   await testAtomicStyleLabel();
   await testAtomicInlineKeyframesMatchTheSemanticModel();
+  await testAtomicKeyframesKeepTheirConditions();
+  await testAtomicGlobalAnimationSharesTheKeyOfAnimation();
   await testAtomicExplainListsAtoms();
   await testAtomShapedClassNameSlugFails();
   await testAtomRegistryRejectsCollisions();

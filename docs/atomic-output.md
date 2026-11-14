@@ -42,7 +42,8 @@ In the atomic model:
   off the styled element (`":global(body)"`) stays a global rule; one that keeps it
   (`"& :global(.dark)"`) becomes an atom.
 - Inline `@keyframes` in a style keep the name the semantic model gives them
-  (`spin-button_bhhycyd`), and the `animation` of that style refers to it.
+  (`spin-button_bhhycyd`), and the `animation` of that style refers to it. Keyframes inside
+  `@media` or `@supports` stay inside it.
 - The cascade of atoms depends only on specificity and `!important`, never on the order of rules
   in the CSS. The fixed rules below say who wins.
 
@@ -60,7 +61,11 @@ r = 1 + L + 3·A + 6·P
 
 - `L` — the longhand depth of the property: 0 for a shorthand or a property outside any family
   (`border`, `color`), 1 for a shorthand inside a shorthand (`border-top`, `border-color`,
-  `padding-inline`), 2 for a longhand of a family (`border-top-color`, `padding-top`).
+  `padding-inline`), 2 for a longhand of a family (`border-top-color`, `padding-top`). A
+  shorthand also counts the properties it resets but cannot set: `border` resets `border-image`,
+  `font` resets `font-kerning`, `font-size-adjust`, `font-feature-settings` and the like, so these
+  count as its sub-properties. A legacy name (`word-wrap`, `grid-gap`) counts as the property it
+  sets.
 - `A` — 1 when the declaration is inside `@media`, `@supports`, `@container` or
   `@starting-style`, otherwise 0.
 - `P` — the rank of the pseudo-class of the styled element:
@@ -100,13 +105,16 @@ css({
 
 Two declarations with no rule between them have no winner: `:focus` and `:focus-visible` (same
 rank), `border-top` and `border-color` (overlapping families of one depth), a physical and a
-flow-relative property (`padding-left` and `padding-inline-start`, `width` and `block-size`), or
-two `@media` conditions that overlap. They fail the build, unless both set one property to one
-value: then either wins with the same result.
+flow-relative property (`padding-left` and `padding-inline-start`, `width` and `block-size`),
+`all` and a property it resets (`color`; custom properties, `direction` and `unicode-bidi` are
+not reset by `all`), or two `@media` conditions that overlap. They fail the build, unless both
+set one property to one value: then either wins with the same result.
 
 The writing mode is not known at build time. In a vertical one the block axis is horizontal, so a
-flow-relative side, size or corner counts as any physical one: `padding-inline-start` overlaps
-`padding-top` as well as `padding-left`.
+flow-relative side, size or corner can be any physical one: `padding-inline-start` overlaps
+`padding-top` as well as `padding-left`. Two flow-relative properties are compared in one writing
+mode at a time, so the ones that never meet in any mode stay independent: `padding-inline` and
+`padding-block`, `margin-inline-start` and `margin-inline-end`, `inline-size` and `block-size`.
 
 The longest selector is 30 classes, for a longhand under `:disabled` inside `@media`. It
 compresses well.
@@ -175,7 +183,10 @@ css({
 It proves exactly four forms:
 
 1. one attribute with different values (`=`) on the styled element:
-   `&[data-state="open"]` and `&[data-state="closed"]`;
+   `&[data-state="open"]` and `&[data-state="closed"]`. Values are compared after their escapes
+   are resolved (`"\6f pen"` is `"open"`), and without regard to case, because HTML matches the
+   values of attributes such as `type` case-insensitively. Only `data-*` attributes and the `s`
+   flag compare case-sensitively;
 2. `:x` and `:not(:x)` on the styled element: `&:checked` and `&:not(:checked)`;
 3. different tags on the subject of the selector: `button&` and `a&`;
 4. `@media` width ranges in one unit (`px`, `rem` or `em`) that do not intersect, from

@@ -488,20 +488,63 @@ function readWidthRangesOf(atRules: readonly string[]): Map<string, WidthInterva
   return ranges;
 }
 
-function readEqualityAttributes(compound: readonly SimpleSelector[]): Map<string, string> {
-  const attributes = new Map<string, string>();
+interface AttributeValue {
+  /** Whether the value is compared case-sensitively for sure. */
+  readonly caseSensitive: boolean;
+  /** The value with its escapes resolved. */
+  readonly value: string;
+}
+
+const MAX_CODE_POINT = 0x10ffff;
+
+/** Resolves the escapes of a CSS string or identifier (CSS Syntax 3, §4.3.7). */
+function unescapeCss(text: string): string {
+  return text.replace(
+    /\\(?:([\da-f]{1,6})(?:\r\n|[\t\n\f\r ])?|(\r\n|[\n\f\r])|([\s\S]))/giu,
+    (_match, hex: string | undefined, newline: string | undefined, other: string | undefined) => {
+      if (hex !== undefined) {
+        const codePoint = Number.parseInt(hex, 16);
+        return codePoint === 0 ||
+          (codePoint >= 0xd800 && codePoint <= 0xdfff) ||
+          codePoint > MAX_CODE_POINT
+          ? "\ufffd"
+          : String.fromCodePoint(codePoint);
+      }
+
+      return newline === undefined ? (other ?? "") : "";
+    },
+  );
+}
+
+const ATTRIBUTE_EQUALITY_PATTERN =
+  /^\s*([\w-]+)\s*=\s*(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^'\\]|\\[\s\S])*)'|((?:[^\s"'\\]|\\[\s\S])+))\s*(?:([is])\s*)?$/iu;
+
+function readEqualityAttributes(compound: readonly SimpleSelector[]): Map<string, AttributeValue> {
+  const attributes = new Map<string, AttributeValue>();
 
   compound.forEach((simple) => {
-    const match = /^\s*([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"']+))\s*$/u.exec(
-      simple.argument ?? "",
-    );
+    const match = ATTRIBUTE_EQUALITY_PATTERN.exec(simple.argument ?? "");
 
     if (simple.kind === "attribute" && match !== null) {
-      attributes.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4]);
+      const name = match[1].toLowerCase();
+      const flag = match[5]?.toLowerCase();
+      // HTML matches the values of some attributes (`type`, `lang`, ...)
+      // case-insensitively; `data-*` attributes and the `s` flag never do.
+      const caseSensitive = flag === "s" || (flag === undefined && name.startsWith("data-"));
+      attributes.set(name, {
+        caseSensitive,
+        value: unescapeCss(match[2] ?? match[3] ?? match[4]),
+      });
     }
   });
 
   return attributes;
+}
+
+function areAttributeValuesDifferent(left: AttributeValue, right: AttributeValue): boolean {
+  return left.caseSensitive && right.caseSensitive
+    ? left.value !== right.value
+    : left.value.toLowerCase() !== right.value.toLowerCase();
 }
 
 function readNegations(compound: readonly SimpleSelector[]): Set<string> {
@@ -548,9 +591,10 @@ export function areConditionsIncompatible(
   const leftAttributes = readEqualityAttributes(leftCompound);
   const rightAttributes = readEqualityAttributes(rightCompound);
   if (
-    [...leftAttributes].some(
-      ([name, value]) => rightAttributes.has(name) && rightAttributes.get(name) !== value,
-    )
+    [...leftAttributes].some(([name, value]) => {
+      const other = rightAttributes.get(name);
+      return other !== undefined && areAttributeValuesDifferent(value, other);
+    })
   ) {
     return true;
   }

@@ -212,6 +212,32 @@ function resolveGlobalSelector(element: Element, selector: string): string {
   ].join("");
 }
 
+/**
+ * Replaces the `&` that stands for the styled element. An `&` inside a quoted
+ * string (`[data-label="&"]`) or after a backslash is text and stays.
+ */
+function replaceStyleMarker(selector: string, replacement: string): string {
+  let quote: null | string = null;
+
+  for (let index = 0; index < selector.length; index += 1) {
+    const char = selector[index];
+
+    if (char === "\\") {
+      index += 1;
+    } else if (quote !== null) {
+      if (char === quote) {
+        quote = null;
+      }
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "&") {
+      return `${selector.slice(0, index)}${replacement}${selector.slice(index + 1)}`;
+    }
+  }
+
+  throw new Error(`dx-styles atomic output cannot find the styled element in "${selector}".`);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[$()*+.?[\\\]^{|}]/gu, "\\$&");
 }
@@ -311,6 +337,28 @@ export function composeAtomicClassNames(
     .join(" ");
 }
 
+/**
+ * The property and value of a declaration that stylis parsed. Stylis reads
+ * `animation::global(spin) 1s` as the property `animation:` with the value
+ * `global(spin) 1s`; the WyW preprocessor restores the property `animation`
+ * with the value `:global(spin) 1s`, and so does the atomizer, so that both
+ * share the key of `animation`.
+ */
+function readDeclaration(name: string, value: string): readonly [string, string] {
+  const withoutColon = name.endsWith(":") ? name.slice(0, -1) : name;
+
+  if (
+    withoutColon !== name &&
+    ANIMATION_PROPERTIES.has(withoutColon.toLowerCase()) &&
+    value.startsWith("global(")
+  ) {
+    return readDeclaration(withoutColon, `:${value}`);
+  }
+
+  // Custom property names are case-sensitive; other names are not.
+  return [name.startsWith("--") ? name : name.toLowerCase(), value];
+}
+
 interface DeclarationGroup {
   readonly atRules: readonly string[];
   readonly property: string;
@@ -318,12 +366,18 @@ interface DeclarationGroup {
   readonly values: string[];
 }
 
+/** A non-conditional at-rule (`@keyframes`, `@font-face`) and the conditions around it. */
+interface PassthroughRule {
+  readonly atRules: readonly string[];
+  readonly element: Element;
+}
+
 interface CollectedStyle {
   readonly classPattern: RegExp;
   /** Rules whose :global() selector leaves the element of the style out. */
   readonly globalRules: string[];
   readonly groups: DeclarationGroup[];
-  readonly passthrough: Element[];
+  readonly passthrough: PassthroughRule[];
   readonly place: string;
 }
 
@@ -365,10 +419,7 @@ function collectDeclarationGroups(
           return;
         }
 
-        // Custom property names are case-sensitive; other names are not.
-        const name = String(child.props);
-        const property = name.startsWith("--") ? name : name.toLowerCase();
-        const value = child.children;
+        const [property, value] = readDeclaration(String(child.props), child.children);
 
         if (current?.property === property) {
           current.values.push(value);
@@ -407,15 +458,19 @@ function collectDeclarationGroups(
       return;
     }
 
-    passthrough.push(element);
+    passthrough.push({ atRules, element });
   });
 }
 
-function readScopedKeyframes(elements: readonly Element[]): Set<string> {
+/**
+ * Names of the keyframes that a style scopes. Like the WyW preprocessor, only
+ * keyframes at the top level of the style scope the references to them.
+ */
+function readScopedKeyframes(passthrough: readonly PassthroughRule[]): Set<string> {
   return new Set(
-    elements
-      .filter((element) => element.type === KEYFRAMES)
-      .map((element) => String((element.props as string[])[0] ?? ""))
+    passthrough
+      .filter(({ atRules, element }) => atRules.length === 0 && element.type === KEYFRAMES)
+      .map(({ element }) => String((element.props as string[])[0] ?? ""))
       .filter((name) => name.length > 0 && !name.startsWith(":global(")),
   );
 }
@@ -500,7 +555,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
       readAtomRepeatCount(group.property, group.atRules, selector),
     );
     const selectorText = relativeSelectors
-      .map((selector, index) => selector.replace("&", "&".repeat(repeatCounts[index])))
+      .map((selector, index) => replaceStyleMarker(selector, "&".repeat(repeatCounts[index])))
       .join(",");
     const cssText =
       selectorText === "&" && group.atRules.length === 0
@@ -533,7 +588,9 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
   if (passthrough.length > 0 || globalRules.length > 0) {
     rules[`.${input.className}`] = {
       className: input.className,
-      cssText: `${serialize(passthrough, stringify)}${globalRules.join("")}`,
+      cssText: `${passthrough
+        .map(({ atRules, element }) => wrapInAtRules(atRules, serialize([element], stringify)))
+        .join("")}${globalRules.join("")}`,
       displayName: input.displayName,
       start: input.location?.start,
     };

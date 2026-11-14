@@ -14,7 +14,14 @@
  * mdn-data marks "asSpecified" (from their specifications), and links the
  * flow-relative box shorthands (`padding-inline`, ...) to the physical box
  * shorthand of their family and the side shorthands (`border-top`, ...) to
- * `border`.
+ * `border`. A shorthand also lists the properties it resets but cannot set
+ * (its reset-only sub-properties): `border` resets `border-image` (CSS
+ * Cascade 5, §3), `font` resets `font-kerning` and the other "reset
+ * implicitly" properties (CSS Fonts 4, §2.7), `mask` resets `mask-border`, and
+ * `animation` resets `animation-composition` and `animation-range`.
+ *
+ * `PROPERTY_ALIASES` maps a legacy name to the property it sets
+ * (`word-wrap` to `overflow-wrap`).
  */
 const BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";
 // The first character of a table code is one of the first 35 digits: `z` starts
@@ -139,7 +146,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "animation": [
     "animation-name", "animation-duration", "animation-timing-function", "animation-delay",
     "animation-direction", "animation-iteration-count", "animation-fill-mode",
-    "animation-play-state", "animation-timeline",
+    "animation-play-state", "animation-timeline", "animation-composition", "animation-range",
   ],
   "animation-range": ["animation-range-start", "animation-range-end"],
   "background": [
@@ -149,7 +156,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "background-position": ["background-position-x", "background-position-y"],
   "border": [
     "border-width", "border-style", "border-color", "border-top", "border-right", "border-bottom",
-    "border-left",
+    "border-left", "border-image",
   ],
   "border-block": ["border-block-width", "border-block-style", "border-block-color"],
   "border-block-color": ["border-block-start-color", "border-block-end-color"],
@@ -212,8 +219,9 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "flex": ["flex-grow", "flex-shrink", "flex-basis"],
   "flex-flow": ["flex-direction", "flex-wrap"],
   "font": [
-    "font-style", "font-variant", "font-weight", "font-stretch", "font-size", "line-height",
-    "font-family",
+    "font-style", "font-variant", "font-weight", "font-width", "font-size", "line-height",
+    "font-family", "font-feature-settings", "font-kerning", "font-language-override",
+    "font-optical-sizing", "font-size-adjust", "font-variation-settings",
   ],
   "font-synthesis": [
     "font-synthesis-position", "font-synthesis-small-caps", "font-synthesis-style",
@@ -226,12 +234,10 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "gap": ["row-gap", "column-gap"],
   "grid": [
     "grid-template-rows", "grid-template-columns", "grid-template-areas", "grid-auto-rows",
-    "grid-auto-columns", "grid-auto-flow", "grid-column-gap", "grid-row-gap", "column-gap",
-    "row-gap",
+    "grid-auto-columns", "grid-auto-flow", "column-gap", "row-gap",
   ],
   "grid-area": ["grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"],
   "grid-column": ["grid-column-start", "grid-column-end"],
-  "grid-gap": ["grid-row-gap", "grid-column-gap"],
   "grid-row": ["grid-row-start", "grid-row-end"],
   "grid-template": ["grid-template-columns", "grid-template-rows", "grid-template-areas"],
   "inset": ["top", "bottom", "left", "right", "inset-block", "inset-inline"],
@@ -246,7 +252,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "margin-inline": ["margin-inline-start", "margin-inline-end"],
   "mask": [
     "mask-image", "mask-mode", "mask-repeat", "mask-position", "mask-clip", "mask-origin",
-    "mask-size", "mask-composite",
+    "mask-size", "mask-composite", "mask-border",
   ],
   "mask-border": [
     "mask-border-mode", "mask-border-outset", "mask-border-repeat", "mask-border-slice",
@@ -299,8 +305,20 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
     "transition-delay", "transition-duration", "transition-property", "transition-timing-function",
     "transition-behavior",
   ],
-  "view-timeline": ["view-timeline-name", "view-timeline-axis"],
+  "view-timeline": ["view-timeline-name", "view-timeline-axis", "view-timeline-inset"],
   "white-space": ["text-wrap-mode", "white-space-collapse"],
+};
+
+/** Legacy names and the property each one sets. */
+export const PROPERTY_ALIASES: Readonly<Record<string, string>> = {
+  "font-stretch": "font-width",
+  "grid-column-gap": "column-gap",
+  "grid-gap": "gap",
+  "grid-row-gap": "row-gap",
+  "page-break-after": "break-after",
+  "page-break-before": "break-before",
+  "page-break-inside": "break-inside",
+  "word-wrap": "overflow-wrap",
 };
 
 if (PROPERTY_CODE_TABLE.length > TABLE_CODE_CAPACITY) {
@@ -326,26 +344,34 @@ export function readPropertyCode(property: string): null | string {
   return propertyCodes.get(property) ?? null;
 }
 
+function resolveAlias(property: string): string {
+  return Object.hasOwn(PROPERTY_ALIASES, property) ? PROPERTY_ALIASES[property] : property;
+}
+
 /**
  * 0 for a shorthand or a property outside any family, 1 for a shorthand that is
  * part of another shorthand (`border-top`, `border-color`), 2 for a longhand of
- * a family (`border-top-color`, `padding-top`).
+ * a family (`border-top-color`, `padding-top`). An alias has the depth of the
+ * property it sets.
  */
 export function readLonghandDepth(property: string): LonghandDepth {
-  if (!shorthandParents.has(property)) {
+  const resolved = resolveAlias(property);
+
+  if (!shorthandParents.has(resolved)) {
     return 0;
   }
 
-  return Object.hasOwn(SHORTHAND_SUBPROPERTIES, property) ? 1 : 2;
+  return Object.hasOwn(SHORTHAND_SUBPROPERTIES, resolved) ? 1 : 2;
 }
 
 function collectLonghands(property: string, into: Set<string>): Set<string> {
-  const subProperties = Object.hasOwn(SHORTHAND_SUBPROPERTIES, property)
-    ? SHORTHAND_SUBPROPERTIES[property]
+  const resolved = resolveAlias(property);
+  const subProperties = Object.hasOwn(SHORTHAND_SUBPROPERTIES, resolved)
+    ? SHORTHAND_SUBPROPERTIES[resolved]
     : undefined;
 
   if (subProperties === undefined) {
-    into.add(property);
+    into.add(resolved);
     return into;
   }
 
@@ -353,66 +379,120 @@ function collectLonghands(property: string, into: Set<string>): Set<string> {
   return into;
 }
 
-const physicalSides = ["top", "right", "bottom", "left"] as const;
-const physicalCorners = ["top-left", "top-right", "bottom-right", "bottom-left"] as const;
+type PhysicalSide = "bottom" | "left" | "right" | "top";
 
-// Physical properties a flow-relative longhand can set (CSS Logical Properties
-// and Values Level 1). The writing mode is not known at build time, and a
-// vertical one maps the block axis to x and the inline axis to y, so a
-// flow-relative side, corner, size or axis may be any of its physical ones.
-function readPhysicalEquivalents(longhand: string): string[] {
-  if (/^border-(?:start|end)-(?:start|end)-radius$/u.test(longhand)) {
-    return physicalCorners.map((corner) => `border-${corner}-radius`);
-  }
-
-  const size = /^(min-|max-|contain-intrinsic-)?(?:block|inline)-size$/u.exec(longhand);
-  if (size !== null) {
-    return ["height", "width"].map((dimension) => `${size[1] ?? ""}${dimension}`);
-  }
-
-  const axis = /^(overflow|overscroll-behavior)-(?:block|inline)$/u.exec(longhand);
-  if (axis !== null) {
-    return [`${axis[1]}-x`, `${axis[1]}-y`];
-  }
-
-  const side = /^(.*?)-?(?:block|inline)-(?:start|end)(-.*)?$/u.exec(longhand);
-  if (side === null) {
-    return [];
-  }
-
-  const [, prefix, suffix = ""] = side;
-
-  return physicalSides.map((physicalSide) =>
-    prefix === "inset" || prefix === ""
-      ? `${physicalSide}${suffix}`
-      : `${prefix}-${physicalSide}${suffix}`,
-  );
+interface WritingMode {
+  readonly block: { readonly end: PhysicalSide; readonly start: PhysicalSide };
+  readonly inline: { readonly end: PhysicalSide; readonly start: PhysicalSide };
 }
 
-const affectedLonghands = new Map<string, Set<string>>();
+function writingMode(
+  blockStart: PhysicalSide,
+  blockEnd: PhysicalSide,
+  inlineStart: PhysicalSide,
+  inlineEnd: PhysicalSide,
+): WritingMode {
+  return {
+    block: { end: blockEnd, start: blockStart },
+    inline: { end: inlineEnd, start: inlineStart },
+  };
+}
 
-function collectAffectedLonghands(property: string): Set<string> {
+// The writing mode is not known at build time. These are the mappings of the
+// flow-relative sides to the physical ones that `writing-mode` and `direction`
+// give (CSS Writing Modes 4, §6): horizontal-tb, vertical-rl (and sideways-rl)
+// and vertical-lr (and sideways-lr), each with ltr and rtl.
+const writingModes: readonly WritingMode[] = [
+  writingMode("top", "bottom", "left", "right"),
+  writingMode("top", "bottom", "right", "left"),
+  writingMode("right", "left", "top", "bottom"),
+  writingMode("right", "left", "bottom", "top"),
+  writingMode("left", "right", "top", "bottom"),
+  writingMode("left", "right", "bottom", "top"),
+];
+
+function isHorizontal(mode: WritingMode): boolean {
+  return mode.block.start === "top" || mode.block.start === "bottom";
+}
+
+/**
+ * The physical property that a flow-relative longhand sets in one writing
+ * mode (CSS Logical Properties and Values 1); any other longhand is itself.
+ */
+function toPhysical(longhand: string, mode: WritingMode): string {
+  const corner = /^border-(start|end)-(start|end)-radius$/u.exec(longhand);
+  if (corner !== null) {
+    const sides = [
+      mode.block[corner[1] as "end" | "start"],
+      mode.inline[corner[2] as "end" | "start"],
+    ];
+    const vertical = sides.find((side) => side === "top" || side === "bottom");
+    const horizontal = sides.find((side) => side === "left" || side === "right");
+    return `border-${vertical}-${horizontal}-radius`;
+  }
+
+  const size = /^(min-|max-|contain-intrinsic-)?(block|inline)-size$/u.exec(longhand);
+  if (size !== null) {
+    const isHeight = (size[2] === "block") === isHorizontal(mode);
+    return `${size[1] ?? ""}${isHeight ? "height" : "width"}`;
+  }
+
+  const axis = /^(overflow|overscroll-behavior)-(block|inline)$/u.exec(longhand);
+  if (axis !== null) {
+    const isY = (axis[2] === "block") === isHorizontal(mode);
+    return `${axis[1]}-${isY ? "y" : "x"}`;
+  }
+
+  const side = /^(.*?)-?(block|inline)-(start|end)(-.*)?$/u.exec(longhand);
+  if (side === null) {
+    return longhand;
+  }
+
+  const [, prefix, flowAxis, edge, suffix = ""] = side;
+  const physicalSide = mode[flowAxis as "block" | "inline"][edge as "end" | "start"];
+
+  return prefix === "inset" || prefix === ""
+    ? `${physicalSide}${suffix}`
+    : `${prefix}-${physicalSide}${suffix}`;
+}
+
+// Per writing mode, the physical longhands a declaration sets.
+const affectedLonghands = new Map<string, readonly Set<string>[]>();
+
+function collectAffectedLonghands(property: string): readonly Set<string>[] {
   const cached = affectedLonghands.get(property);
   if (cached !== undefined) {
     return cached;
   }
 
-  const longhands = collectLonghands(property, new Set());
-  affectedLonghands.set(property, longhands);
-
-  [...longhands].forEach((longhand) => {
-    readPhysicalEquivalents(longhand).forEach((physical) => longhands.add(physical));
-  });
-
-  return longhands;
+  const longhands = [...collectLonghands(property, new Set())];
+  const perMode = writingModes.map(
+    (mode) => new Set(longhands.map((longhand) => toPhysical(longhand, mode))),
+  );
+  affectedLonghands.set(property, perMode);
+  return perMode;
 }
 
-/** Whether two declarations can set the same longhand of one element. */
+// `all` resets every property except these and custom properties (CSS Cascade 5, §3.2).
+const notResetByAll = new Set(["direction", "unicode-bidi"]);
+
+function isResetByAll(property: string): boolean {
+  return !property.startsWith("--") && !notResetByAll.has(property);
+}
+
+/** Whether two declarations can set the same longhand of one element in one writing mode. */
 export function propertiesOverlap(left: string, right: string): boolean {
-  if (left === right || left === "all" || right === "all") {
+  if (left === right) {
     return true;
   }
 
-  const leftLonghands = collectAffectedLonghands(left);
-  return [...collectAffectedLonghands(right)].some((longhand) => leftLonghands.has(longhand));
+  if (left === "all" || right === "all") {
+    return isResetByAll(left === "all" ? right : left);
+  }
+
+  const leftModes = collectAffectedLonghands(left);
+  const rightModes = collectAffectedLonghands(right);
+  return leftModes.some((leftLonghands, mode) =>
+    [...rightModes[mode]].some((longhand) => leftLonghands.has(longhand)),
+  );
 }
