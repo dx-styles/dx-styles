@@ -1108,6 +1108,12 @@ function testCxKeepsLastAtomPerKey() {
   assert.equal(cx("dx-za_aaaaaaaa", "dx-za_bbbbbbbb"), "dx-za_aaaaaaaa dx-za_bbbbbbbb");
   assert.equal(cx("dx-0A_aaaaaaaa", "dx-0A_bbbbbbbb"), "dx-0A_aaaaaaaa dx-0A_bbbbbbbb");
   assert.equal(cx("dx-0a12_aaaaaaaa", "dx-0a12_bbbbbbbb"), "dx-0a12_aaaaaaaa dx-0a12_bbbbbbbb");
+
+  // css() composes style handles by the same rule: a handle given again wins.
+  const red = createStyleHandle("dx-0a_aaaaaaaa");
+  const blue = createStyleHandle("dx-0a_bbbbbbbb");
+  assert.equal(css(red, blue, red), "dx-0a_aaaaaaaa");
+  assert.equal(css(blue, red, blue), "dx-0a_bbbbbbbb");
 }
 
 function testRuntimeKeyframes() {
@@ -5911,6 +5917,42 @@ async function testAtomicStyleHandlesComposeByKey() {
       "margin:0;",
       "padding:4px;",
     ]);
+
+    // A handle given again after another one of the same key wins, as in cx.
+    const tones = await runWywTransform(
+      `
+        import { css } from "dx-styles";
+
+        export const red = css({ color: "red" });
+        export const blue = css({ color: "blue" });
+      `,
+      join(fixtureRoot, "tones.ts"),
+      { output: "atomic" },
+    );
+    await writeFile(join(fixtureRoot, "tones.js"), tones.code);
+    const repeated = await runWywTransform(
+      `
+        import { createStyleHandle, css } from "dx-styles";
+        import { blue, red } from "./tones.js";
+
+        const redHandle = createStyleHandle(red);
+        const blueHandle = createStyleHandle(blue);
+
+        export const lastRed = css(redHandle, blueHandle, redHandle);
+        export const lastBlue = css(blueHandle, redHandle, blueHandle);
+      `,
+      join(fixtureRoot, "repeated.ts"),
+      { output: "atomic" },
+    );
+    const tonesCss = `${tones.cssText ?? ""}${repeated.cssText ?? ""}`;
+    assert.deepEqual(
+      readAtomDeclarations(tonesCss, readExportedClassName(repeated.code, "lastRed")),
+      ["color:red;"],
+    );
+    assert.deepEqual(
+      readAtomDeclarations(tonesCss, readExportedClassName(repeated.code, "lastBlue")),
+      ["color:blue;"],
+    );
 
     // Two known handles are checked against each other.
     await assert.rejects(

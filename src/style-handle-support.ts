@@ -56,14 +56,16 @@ export function createStyleHandleRegistry<TStyle>(
 
   return {
     collectStyleHandleClassNames(parts) {
-      const seen = new Set<string>();
+      // In argument order and with repeats: the composition of the caller
+      // decides which occurrence wins (the last atom of a key, in cx).
+      const collected: string[] = [];
 
       parts.forEach((part) => {
         if (typeof part === "string") {
           splitClassNameTokens(part)
             .filter((token) => classRefRegistry.has(token))
             .forEach((token) => {
-              seen.add(token);
+              collected.push(token);
             });
           return;
         }
@@ -72,7 +74,7 @@ export function createStyleHandleRegistry<TStyle>(
         if (descriptorClassNameRefs.length > 0) {
           descriptorClassNameRefs.forEach((className) => {
             registerStyleHandleClassName(className);
-            seen.add(className);
+            collected.push(className);
           });
           return;
         }
@@ -84,11 +86,11 @@ export function createStyleHandleRegistry<TStyle>(
 
         registerStyleHandleClassName(className);
         splitClassNameTokens(className).forEach((token) => {
-          seen.add(token);
+          collected.push(token);
         });
       });
 
-      return [...seen];
+      return collected;
     },
     normalizeStyleParts(parts) {
       return options.normalizeStyleParts(parts, readRegisteredStyleToken);
