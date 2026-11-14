@@ -91,18 +91,18 @@ function hashToBase36(source: string, width: number): string {
 let atomHash: (source: string, width: number) => string = hashToBase36;
 
 /**
- * Replaces the hash of atom codes for the duration of `run`. Tests use it to
- * force a collision; the build never calls it.
+ * Replaces the hash of atom codes until `run` settles. Tests use it to force a
+ * collision; the build never calls it.
  */
-export function withAtomHashForTesting<TResult>(
+export async function withAtomHashForTesting<TResult>(
   hash: (source: string, width: number) => string,
-  run: () => TResult,
-): TResult {
+  run: () => Promise<TResult>,
+): Promise<TResult> {
   const previous = atomHash;
   atomHash = hash;
 
   try {
-    return run();
+    return await run();
   } finally {
     atomHash = previous;
   }

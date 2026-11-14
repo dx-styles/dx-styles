@@ -233,14 +233,20 @@ export function createDxStylesExplainIndex(
         };
       }),
     };
-    const bucket = recordsByClassName.get(record.className);
+    // In the atomic output an atom belongs to every style that uses it, so a
+    // query by atom lists all of them.
+    const keys = "atoms" in record && record.atoms !== undefined ? [record.className, ...record.atoms] : [record.className];
 
-    if (bucket === undefined) {
-      recordsByClassName.set(record.className, [resolvedRecord]);
-      return;
-    }
+    keys.forEach((key) => {
+      const bucket = recordsByClassName.get(key);
 
-    bucket.push(resolvedRecord);
+      if (bucket === undefined) {
+        recordsByClassName.set(key, [resolvedRecord]);
+        return;
+      }
+
+      bucket.push(resolvedRecord);
+    });
   });
 
   return recordsByClassName;
@@ -279,6 +285,10 @@ function formatExplainRecord(record: DxStylesExplainRecord): string {
 
   if (record.kind === "keyframes" && record.frames.length > 0) {
     lines.push(`  frames: ${record.frames.join(" | ")}`);
+  }
+
+  if ("atoms" in record && record.atoms !== undefined) {
+    lines.push(`  atoms: ${record.atoms.length === 0 ? "none" : record.atoms.join(" ")}`);
   }
 
   if (record.selector !== undefined) {
