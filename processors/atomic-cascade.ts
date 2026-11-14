@@ -712,7 +712,8 @@ export function checkAtomicCascade(
         (earlier.part === later.part && !parts[earlier.part].checkWithin) ||
         (earlier.part !== later.part && !canMeet(earlier.part, later.part)) ||
         !propertiesOverlap(x.property, y.property) ||
-        (x.key === y.key && x.value === y.value && x.important === y.important) ||
+        // One property with one value gives one result whichever declaration wins.
+        (x.property === y.property && x.value === y.value && x.important === y.important) ||
         areConditionsIncompatible(x, y)
       ) {
         continue;

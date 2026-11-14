@@ -5162,7 +5162,12 @@ async function testAtomicNamesDependOnlyOnTheDeclaration() {
   const one = await runWywTransform(
     `
       import { css } from "dx-styles";
-      export const panel = css({ color: "red", backgroundImage: "url(./a.png)" });
+      export const panel = css({
+        color: "red",
+        backgroundImage: "url(./a.png)",
+        cursor: "url(icon.svg), auto",
+        listStyleImage: "url(/marker.svg)",
+      });
     `,
     "atomic-names/one/panel.ts",
     { output: "atomic" },
@@ -5170,7 +5175,12 @@ async function testAtomicNamesDependOnlyOnTheDeclaration() {
   const two = await runWywTransform(
     `
       import { css } from "dx-styles";
-      export const otherName = css({ color: "red", backgroundImage: "url(./a.png)" });
+      export const otherName = css({
+        color: "red",
+        backgroundImage: "url(./a.png)",
+        cursor: "url(icon.svg), auto",
+        listStyleImage: "url(/marker.svg)",
+      });
     `,
     "atomic-names/two/other.ts",
     { displayName: false, minifyClassNames: true, output: "atomic" },
@@ -5189,6 +5199,69 @@ async function testAtomicNamesDependOnlyOnTheDeclaration() {
   const oneImage = readAtomFor(oneCss, onePanel, "background-image:");
   const twoImage = readAtomFor(twoCss, twoPanel, "background-image:");
   assert.notEqual(oneImage, twoImage);
+  // So does a relative url() without a leading dot; a root-relative one does not.
+  assert.notEqual(
+    readAtomFor(oneCss, onePanel, "cursor:url(icon.svg),auto;"),
+    readAtomFor(twoCss, twoPanel, "cursor:url(icon.svg),auto;"),
+  );
+  assert.equal(
+    readAtomFor(oneCss, onePanel, "list-style-image:url(/marker.svg);"),
+    readAtomFor(twoCss, twoPanel, "list-style-image:url(/marker.svg);"),
+  );
+}
+
+async function testAtomicCustomPropertiesKeepTheirCase() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      const upper = css({ "--accentColor": "red" });
+      const lower = css({ "--accentcolor": "blue" });
+      export const both = css(upper, lower, { color: "var(--accentColor)" });
+    `,
+    "atomic-custom-case.ts",
+    { output: "atomic" },
+  );
+  const both = readExportedClassName(result.code, "both");
+
+  assert.deepEqual(readAtomDeclarations(result.cssText ?? "", both), [
+    "--accentColor:red;",
+    "--accentcolor:blue;",
+    "color:var(--accentColor);",
+  ]);
+}
+
+async function testAtomicSelectorsMatchTheSemanticModel() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const page = css({
+      color: "black",
+      ":global(body)": { margin: 0 },
+      "& :global(.dark)": { color: "white" },
+    });
+    export const labelled = css({ '&[data-label="a  b"]': { color: "teal" } });
+  `;
+  const semantic = await runWywTransform(source, "atomic-selectors.ts");
+  const atomic = await runWywTransform(source, "atomic-selectors.ts", { output: "atomic" });
+  const semanticCss = semantic.cssText ?? "";
+  const atomicCss = atomic.cssText ?? "";
+  const page = readExportedClassName(atomic.code, "page");
+
+  // A :global() selector without & is a global rule in both models.
+  const [globalRule] = /body\s*\{[^}]*\}/u.exec(semanticCss) ?? [];
+  assert.ok(globalRule, semanticCss);
+  assert.ok(atomicCss.includes(globalRule), atomicCss);
+  assert.deepEqual(readAtomDeclarations(atomicCss, page), ["color:black;", "color:white;"]);
+  assert.match(readSelectorOf(atomicCss, readAtomFor(atomicCss, page, "color:white;")), /^\.dark \.dx-/u);
+  // Whitespace inside a quoted attribute value is part of the value.
+  assert.match(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "labelled"), "color:teal;"),
+    ),
+    /\[data-label="a {2}b"\]$/u,
+  );
 }
 
 async function testAtomicOrderRules() {
@@ -5308,6 +5381,17 @@ async function testAtomicOrderErrors() {
     "atomic-errors/border-families.ts",
     /"border-top" and "border-color" have no order rule/su,
   );
+  // In a vertical writing mode block-size is the width and inline-start a top or bottom side.
+  await assertAtomicBuildFails(
+    `export const vertical = css({ blockSize: 10, width: 20 });`,
+    "atomic-errors/vertical-size.ts",
+    /"block-size: 10px".*"width: 20px".*"block-size" and "width" have no order rule/su,
+  );
+  await assertAtomicBuildFails(
+    `export const vertical = css({ paddingInlineStart: 4, paddingTop: 8 });`,
+    "atomic-errors/vertical-side.ts",
+    /"padding-inline-start" and "padding-top" have no order rule/su,
+  );
   await assertAtomicBuildFails(
     `export const layered = css({ "@layer base": { color: "red" } });`,
     "atomic-errors/layer.ts",
@@ -5375,6 +5459,10 @@ async function testAtomicAllowedOrders() {
       export const ranges = css({
         "@media (width < 40rem)": { color: "green" },
         "@media (width >= 40rem)": { color: "red" },
+      });
+      export const sameValue = css({
+        "&:focus": { color: "red" },
+        "&:focus-visible": { color: "red" },
       });
       export const steps = css({
         "@media (40rem <= width < 64rem)": { gap: 8 },
@@ -5449,7 +5537,11 @@ async function testAtomicRecipesKeepTheLastAtomPerKey() {
       export const card = slotRecipe({
         slots: ["root", "title"],
         base: { root: { margin: 0 }, title: { color: "black" } },
-        variants: { tone: { accent: { title: { color: "blue" } } } },
+        variants: {
+          tone: { accent: { title: { color: "blue" } } },
+          size: { lg: { root: { padding: 8 } } },
+        },
+        compoundVariants: [{ tone: "accent", size: "lg", css: { title: { color: "navy" } } }],
       });
     `,
     "atomic-recipes.ts",
@@ -5477,6 +5569,9 @@ async function testAtomicRecipesKeepTheLastAtomPerKey() {
   assert.deepEqual(readAtomDeclarations(cssText, card().title), ["color:black;"]);
   assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).title), ["color:blue;"]);
   assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).root), ["margin:0;"]);
+  const compound = card({ tone: "accent", size: "lg" });
+  assert.deepEqual(readAtomDeclarations(cssText, compound.title), ["color:navy;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, compound.root), ["margin:0;", "padding:8px;"]);
 }
 
 async function testAtomicStyleHandlesComposeByKey() {
@@ -5494,6 +5589,9 @@ async function testAtomicStyleHandlesComposeByKey() {
           base: { color: "black", padding: 4 },
           variants: { tone: { accent: { color: "blue" } } },
         });
+
+        export const inset = recipe({ base: { paddingTop: 4 } });
+        export const flat = recipe({ base: { padding: 0 } });
       `,
       join(fixtureRoot, "button.ts"),
       { output: "atomic" },
@@ -5520,6 +5618,24 @@ async function testAtomicStyleHandlesComposeByKey() {
       "margin:0;",
       "padding:4px;",
     ]);
+
+    // Two known handles are checked against each other.
+    await assert.rejects(
+      runWywTransform(
+        `
+          import { createRecipeStyleHandles, css } from "dx-styles";
+          import { flat, inset } from "./button.js";
+
+          export const both = css(
+            createRecipeStyleHandles(inset).root,
+            createRecipeStyleHandles(flat).root,
+          );
+        `,
+        join(fixtureRoot, "both.ts"),
+        { output: "atomic" },
+      ),
+      /style handle #1 of css\(\) "both" sets "padding-top: 4px".*style handle #2 of css\(\) "both" sets "padding: 0".*a longhand wins over its shorthand/su,
+    );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -5708,6 +5824,8 @@ async function main() {
   await testSemanticOutputIsUnchanged();
   await testAtomicCssEmitsOneAtomPerDeclaration();
   await testAtomicNamesDependOnlyOnTheDeclaration();
+  await testAtomicCustomPropertiesKeepTheirCase();
+  await testAtomicSelectorsMatchTheSemanticModel();
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicAllowedOrders();

@@ -38,6 +38,9 @@ In the atomic model:
 - Style handles (`createStyleHandle`, `createRecipeStyleHandles`, `createSlotRecipeStyleHandles`)
   are strings of atoms; `css(handle, { ... })` keeps the last atom of each key.
 - `createTheme`, `createTokenContract`, `createVar` and `keyframes()` are unchanged.
+- A `:global()` selector means what it means in the semantic model. A rule that `:global()` takes
+  off the styled element (`":global(body)"`) stays a global rule; one that keeps it
+  (`"& :global(.dark)"`) becomes an atom.
 - Inline `@keyframes` in a style keep the name the semantic model gives them
   (`spin-button_bhhycyd`), and the `animation` of that style refers to it.
 - The cascade of atoms depends only on specificity and `!important`, never on the order of rules
@@ -97,8 +100,13 @@ css({
 
 Two declarations with no rule between them have no winner: `:focus` and `:focus-visible` (same
 rank), `border-top` and `border-color` (overlapping families of one depth), a physical and a
-flow-relative property of one side (`padding-left` and `padding-inline-start`), or two `@media`
-conditions that overlap. They fail the build.
+flow-relative property (`padding-left` and `padding-inline-start`, `width` and `block-size`), or
+two `@media` conditions that overlap. They fail the build, unless both set one property to one
+value: then either wins with the same result.
+
+The writing mode is not known at build time. In a vertical one the block axis is horizontal, so a
+flow-relative side, size or corner counts as any physical one: `padding-inline-start` overlaps
+`padding-top` as well as `padding-left`.
 
 The longest selector is 30 classes, for a longhand under `:disabled` inside `@media`. It
 compresses well.
@@ -222,7 +230,8 @@ The atom name is `dx-<P><C>_<V>`, in lowercase base36:
 - `C`, the condition code: empty without a condition, otherwise seven characters of hash of the
   at-rules and the selector;
 - `V`, the value code: eight characters of hash of the values and `!important` (and of the module
-  directory, for a relative `url()`).
+  directory, for a relative `url()`: `url(./a.png)` or `url(icon.svg)`, but not `url(/a.png)`,
+  `url(#id)` or a URL with a scheme).
 
 `cx` matches `^dx-(?:[0-9a-y][0-9a-z]|z[0-9a-z]{7})(?:[0-9a-z]{7})?_[0-9a-z]{8}$`. The name does
 not depend on the file, `displayName`, `minifyClassNames` or the build mode, so atoms of a
@@ -244,8 +253,10 @@ Between the two models only CSS applies: a class of the semantic model is a fore
 | `css(handle, …)` with a handle from a semantic library                     | specificity, then the order of stylesheets  |
 | `css(handle, …)` with a handle of an atomic build that this build knows    | the model, with the order check             |
 
-A handle is known to the build when its atoms were built in the same build process. For a handle
-whose atoms the build has not seen, the order check cannot run; the atoms still compose by key.
+A handle is known to the build when its atoms were built in the same build process. The check
+compares known handles with each other and with the local style; the build of each handle has
+already checked the pairs inside it. For a handle whose atoms the build has not seen, the order
+check cannot run; the atoms still compose by key.
 
 Ship libraries in the semantic model: their class names are stable and serve as the contract for
 `createStyleHandle`.

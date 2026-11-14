@@ -1126,9 +1126,20 @@ export function createAtomicStylePart(request: AtomicStylePartRequest): AtomicSt
         place: request.place,
       })
     : emptyAtomizedStyle;
-  const handleDeclarations = styleHandleClassNames.flatMap(
-    (token) => readRegisteredAtomDeclarations(token) ?? [],
-  );
+  // Each argument keeps its own part: the build of a handle checked the pairs
+  // inside it, and the pairs between two handles are checked here.
+  const handleParts: CascadePart[] = request.parts
+    .map((part) =>
+      collectStyleHandleClassNames([part])
+        .flatMap((className) => className.split(/\s+/u))
+        .flatMap((token) => readRegisteredAtomDeclarations(token) ?? []),
+    )
+    .filter((declarations) => declarations.length > 0)
+    .map((declarations, index, all) => ({
+      checkWithin: false,
+      declarations,
+      place: `${all.length > 1 ? `style handle #${index + 1}` : "a style handle"} of ${request.place}`,
+    }));
   const hasLocalStyle = shouldEmitLocalStyleRule(style, styleHandleClassNames);
   const styleClassName =
     atomized.needsStyleClass || (hasLocalStyle && !request.minify) ? request.className : undefined;
@@ -1139,15 +1150,7 @@ export function createAtomicStylePart(request: AtomicStylePartRequest): AtomicSt
   return {
     atoms: atomized.atoms,
     cascadeParts: [
-      ...(handleDeclarations.length > 0
-        ? [
-            {
-              checkWithin: false,
-              declarations: handleDeclarations,
-              place: `a style handle of ${request.place}`,
-            },
-          ]
-        : []),
+      ...handleParts,
       {
         checkWithin: true,
         declarations: atomized.declarations,

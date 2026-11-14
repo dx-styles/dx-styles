@@ -61,7 +61,10 @@ const BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";
 const CONDITION_CODE_WIDTH = 7;
 const PROPERTY_HASH_WIDTH = 7;
 const VALUE_CODE_WIDTH = 8;
-const RELATIVE_URL_PATTERN = /\burl\((["']?)\.[^)]+?\1\)/u;
+const URL_PATTERN = /\burl\(\s*(["']?)(.*?)\1\s*\)/giu;
+// A target with a scheme (`data:`, `https:`), a protocol-relative or
+// root-relative path, or a fragment means the same resource in every module.
+const ABSOLUTE_URL_PATTERN = /^(?:[a-z][\d+.a-z-]*:|\/|#)/iu;
 const IMPORTANT_PATTERN = /!\s*important\s*$/iu;
 const ANIMATION_PROPERTIES = new Set(
   ["", "-webkit-", "-moz-", "-ms-", "-o-"].flatMap((prefix) => [
@@ -108,8 +111,105 @@ export async function withAtomHashForTesting<TResult>(
   }
 }
 
+function hasRelativeUrl(value: string): boolean {
+  return [...value.matchAll(URL_PATTERN)].some(
+    ([, , target]) => target.length > 0 && !ABSOLUTE_URL_PATTERN.test(target),
+  );
+}
+
+/**
+ * Collapses whitespace where it is only syntax; a quoted string and an escaped
+ * character keep theirs (`[data-label="a  b"]`, `.a\\ b`).
+ */
 function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/gu, " ").trim();
+  let result = "";
+  let quote: null | string = null;
+  let pendingSpace = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (quote === null && /\s/u.test(char)) {
+      pendingSpace = result.length > 0;
+      continue;
+    }
+
+    if (pendingSpace) {
+      result += " ";
+      pendingSpace = false;
+    }
+
+    if (char === "\\") {
+      result += value.slice(index, index + 2);
+      index += 1;
+    } else {
+      if (quote === null && (char === '"' || char === "'")) {
+        quote = char;
+      } else if (char === quote) {
+        quote = null;
+      }
+      result += char;
+    }
+  }
+
+  return result;
+}
+
+// The :global() rule of the WyW stylis preprocessor, which the semantic model
+// goes through (`stylisGlobalPlugin` of @wyw-in-js/transform, not exported).
+// The atomizer needs the selector it produces to tell a rule that selects the
+// element of the style from a global rule.
+const GLOBAL_SELECTOR_PATTERN = /(&\f( )?)?:global\(/u;
+
+function readNonMediaParent(element: Element): Element | null {
+  let { parent } = element;
+  while (parent !== null) {
+    if (parent.type !== "@media") {
+      return parent;
+    }
+    parent = parent.parent;
+  }
+  return null;
+}
+
+function readGlobalSelectorModifiers(element: Element): { base: boolean; space: boolean } {
+  const parent = readNonMediaParent(element);
+
+  if (
+    parent !== null &&
+    (((parent.children as Element[]).length === 0 && parent.value.includes(":global(")) ||
+      !element.value.includes(":global("))
+  ) {
+    return readGlobalSelectorModifiers(parent);
+  }
+
+  const match = GLOBAL_SELECTOR_PATTERN.exec(element.value);
+  if (match === null) {
+    throw new Error(`dx-styles atomic output cannot read the :global() selector "${element.value}".`);
+  }
+
+  return { base: match[1] !== undefined, space: match[2] !== undefined };
+}
+
+function resolveGlobalSelector(element: Element, selector: string): string {
+  if (!selector.includes(":global(")) {
+    return selector;
+  }
+
+  const { base, space } = readGlobalSelectorModifiers(element);
+  const tokens = tokenize(selector);
+  const index = tokens.findIndex((token, at) => token === ":" && tokens[at + 1] === "global");
+
+  if (index < 0) {
+    return "";
+  }
+
+  return [
+    ...(tokens[index + 2] === "()" ? tokens.slice(index + 4) : [tokens[index + 2].slice(1, -1)]),
+    space ? " " : "",
+    ...(base ? tokens.slice(0, index - 1) : []),
+    space ? "" : " ",
+  ].join("");
 }
 
 function escapeRegExp(value: string): string {
@@ -218,23 +318,56 @@ interface DeclarationGroup {
   readonly values: string[];
 }
 
+interface CollectedStyle {
+  readonly classPattern: RegExp;
+  /** Rules whose :global() selector leaves the element of the style out. */
+  readonly globalRules: string[];
+  readonly groups: DeclarationGroup[];
+  readonly passthrough: Element[];
+  readonly place: string;
+}
+
 function collectDeclarationGroups(
   elements: readonly Element[],
   atRules: readonly string[],
-  place: string,
-  groups: DeclarationGroup[],
-  passthrough: Element[],
+  style: CollectedStyle,
 ): void {
+  const { groups, passthrough, place } = style;
+
   elements.forEach((element) => {
     if (element.type === RULESET) {
       let current: DeclarationGroup | null = null;
+      const selectors: string[] = [];
+      const globalSelectors: string[] = [];
+
+      (element.props as string[]).forEach((selector) => {
+        const resolved = resolveGlobalSelector(element, selector);
+        if (resolved === selector || style.classPattern.test(resolved)) {
+          selectors.push(resolved);
+        } else {
+          globalSelectors.push(selector);
+        }
+      });
+
+      if (globalSelectors.length > 0) {
+        const globalRule = serialize([{ ...element, props: globalSelectors }], stringify);
+        if (globalRule.length > 0) {
+          style.globalRules.push(wrapInAtRules(atRules, globalRule));
+        }
+      }
+
+      if (selectors.length === 0) {
+        return;
+      }
 
       (element.children as Element[]).forEach((child) => {
         if (child.type !== "decl" || typeof child.children !== "string") {
           return;
         }
 
-        const property = String(child.props).toLowerCase();
+        // Custom property names are case-sensitive; other names are not.
+        const name = String(child.props);
+        const property = name.startsWith("--") ? name : name.toLowerCase();
         const value = child.children;
 
         if (current?.property === property) {
@@ -245,7 +378,7 @@ function collectDeclarationGroups(
         current = {
           atRules,
           property,
-          selectors: element.props as string[],
+          selectors,
           values: [value],
         };
         groups.push(current);
@@ -269,9 +402,7 @@ function collectDeclarationGroups(
       collectDeclarationGroups(
         element.children as Element[],
         [...atRules, normalizeWhitespace(element.value)],
-        place,
-        groups,
-        passthrough,
+        style,
       );
       return;
     }
@@ -303,9 +434,12 @@ function scopeAnimationReferences(
     .join("");
 }
 
+function readClassPattern(className: string): RegExp {
+  return new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`, "gu");
+}
+
 function toRelativeSelector(selector: string, className: string): readonly [string, boolean] {
-  const pattern = new RegExp(`\\.${escapeRegExp(className)}(?![\\w-])`, "gu");
-  const matches = [...selector.matchAll(pattern)];
+  const matches = [...selector.matchAll(readClassPattern(className))];
   const last = matches[matches.length - 1];
 
   if (last === undefined) {
@@ -326,9 +460,15 @@ function wrapInAtRules(atRules: readonly string[], cssText: string): string {
 /** Turns one style into atoms: their rules, names and declarations for the order check. */
 export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
   const elements = compile(`.${input.className}{${input.cssText}}`);
-  const groups: DeclarationGroup[] = [];
-  const passthrough: Element[] = [];
-  collectDeclarationGroups(elements, [], input.place, groups, passthrough);
+  const collected: CollectedStyle = {
+    classPattern: new RegExp(readClassPattern(input.className).source, "u"),
+    globalRules: [],
+    groups: [],
+    passthrough: [],
+    place: input.place,
+  };
+  collectDeclarationGroups(elements, [], collected);
+  const { globalRules, groups, passthrough } = collected;
 
   const keyframes = readScopedKeyframes(passthrough);
   const keyframesSuffix = input.className.replace(/[^a-zA-Z0-9_-]/gu, "");
@@ -346,7 +486,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     const values = ANIMATION_PROPERTIES.has(group.property)
       ? group.values.map((value) => scopeAnimationReferences(value, keyframes, keyframesSuffix))
       : group.values;
-    const relativeUrlScope = values.some((value) => RELATIVE_URL_PATTERN.test(value))
+    const relativeUrlScope = values.some(hasRelativeUrl)
       ? input.moduleDirectory
       : "";
     const valueCode = atomHash(
@@ -390,10 +530,10 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     declarations.push(...atomDeclarations);
   });
 
-  if (passthrough.length > 0) {
+  if (passthrough.length > 0 || globalRules.length > 0) {
     rules[`.${input.className}`] = {
       className: input.className,
-      cssText: serialize(passthrough, stringify),
+      cssText: `${serialize(passthrough, stringify)}${globalRules.join("")}`,
       displayName: input.displayName,
       start: input.location?.start,
     };

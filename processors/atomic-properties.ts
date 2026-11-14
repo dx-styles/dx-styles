@@ -353,44 +353,34 @@ function collectLonghands(property: string, into: Set<string>): Set<string> {
   return into;
 }
 
-const cornerRadii: Readonly<Record<string, readonly string[]>> = {
-  "end-end": ["bottom-right", "bottom-left"],
-  "end-start": ["bottom-left", "bottom-right"],
-  "start-end": ["top-right", "top-left"],
-  "start-start": ["top-left", "top-right"],
-};
+const physicalSides = ["top", "right", "bottom", "left"] as const;
+const physicalCorners = ["top-left", "top-right", "bottom-right", "bottom-left"] as const;
 
-const flowRelativeSizes: Readonly<Record<string, string>> = {
-  "block-size": "height",
-  "inline-size": "width",
-};
-
-// Physical properties a flow-relative longhand can set in a horizontal writing
-// mode, in either direction (CSS Logical Properties and Values Level 1).
+// Physical properties a flow-relative longhand can set (CSS Logical Properties
+// and Values Level 1). The writing mode is not known at build time, and a
+// vertical one maps the block axis to x and the inline axis to y, so a
+// flow-relative side, corner, size or axis may be any of its physical ones.
 function readPhysicalEquivalents(longhand: string): string[] {
-  const corner = /^border-(start|end)-(start|end)-radius$/u.exec(longhand);
-  if (corner !== null) {
-    return cornerRadii[`${corner[1]}-${corner[2]}`].map((side) => `border-${side}-radius`);
+  if (/^border-(?:start|end)-(?:start|end)-radius$/u.test(longhand)) {
+    return physicalCorners.map((corner) => `border-${corner}-radius`);
   }
 
-  const size = /^(min-|max-|contain-intrinsic-)?(block|inline)-size$/u.exec(longhand);
+  const size = /^(min-|max-|contain-intrinsic-)?(?:block|inline)-size$/u.exec(longhand);
   if (size !== null) {
-    return [`${size[1] ?? ""}${flowRelativeSizes[`${size[2]}-size`]}`];
+    return ["height", "width"].map((dimension) => `${size[1] ?? ""}${dimension}`);
   }
 
-  const axis = /^(overflow|overscroll-behavior)-(block|inline)$/u.exec(longhand);
+  const axis = /^(overflow|overscroll-behavior)-(?:block|inline)$/u.exec(longhand);
   if (axis !== null) {
-    return [`${axis[1]}-${axis[2] === "inline" ? "x" : "y"}`];
+    return [`${axis[1]}-x`, `${axis[1]}-y`];
   }
 
-  const side = /^(.*?)-?(block|inline)-(start|end)(-.*)?$/u.exec(longhand);
+  const side = /^(.*?)-?(?:block|inline)-(?:start|end)(-.*)?$/u.exec(longhand);
   if (side === null) {
     return [];
   }
 
-  const [, prefix, flowAxis, edge, suffix = ""] = side;
-  const physicalSides =
-    flowAxis === "inline" ? ["left", "right"] : [edge === "start" ? "top" : "bottom"];
+  const [, prefix, suffix = ""] = side;
 
   return physicalSides.map((physicalSide) =>
     prefix === "inset" || prefix === ""
