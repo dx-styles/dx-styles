@@ -696,7 +696,7 @@ export function checkAtomicCascade(
 
       if (atomicOrder === 0) {
         throw new Error(
-          `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies the later one by order, but the atomic model has no rule that orders these two declarations. ${describeTieHint(x, y)}.`,
+          `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies "${describeCondition(semanticWinner.declaration)}" (${semanticWinner.declaration.property}), but the atomic model has no rule that orders these two declarations. To fix it, ${describeTieHint(x, y)}.`,
         );
       }
 

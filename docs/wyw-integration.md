@@ -25,6 +25,15 @@ export default defineConfig({
 The processor option namespace is `dxStyles`. `prefixer: false` disables WyW's built-in stylis
 prefixer, which targets legacy IE-era browsers (see [Getting Started](./getting-started.md)).
 
+The `dxStyles` options are:
+
+- `minifyClassNames` (default `false`): collapse recipe and slot recipe class names to short
+  hashes, and drop the style label of the atomic output.
+- `output` (default `"semantic"`): the output model. `output: "atomic"` emits one shared class per
+  declaration instead of one class per style, and fails the build when a style's result would
+  depend on declaration order. It needs WyW's stylis preprocessor (the `preprocessor` option unset
+  or `"stylis"`). See [Atomic output](./atomic-output.md).
+
 The public entrypoints are:
 
 - `dx-styles`

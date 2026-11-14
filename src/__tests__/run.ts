@@ -5367,6 +5367,10 @@ async function testAtomicAllowedOrders() {
         "@media (width < 40rem)": { color: "green" },
         "@media (width >= 40rem)": { color: "red" },
       });
+      export const steps = css({
+        "@media (40rem <= width < 64rem)": { gap: 8 },
+        "@media (width >= 64rem)": { gap: 16 },
+      });
     `,
     "atomic-allowed.ts",
     { output: "atomic" },
