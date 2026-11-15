@@ -5336,6 +5336,101 @@ async function testAtomicStyleReferencesInsideIsAndWhere() {
   );
 }
 
+/**
+ * Specificity (a, b, c) of a compound-only or descendant selector without
+ * functional pseudo-classes, by Selectors Level 4 §16: IDs; classes,
+ * attributes and pseudo-classes; type selectors and pseudo-elements.
+ */
+function countSpecificity(selector: string): [number, number, number] {
+  assert.doesNotMatch(selector, /:(?:not|is|where|has)\(/u, selector);
+  const withoutAttributes = selector.replace(/\[[^\]]*\]/gu, "[]");
+  const ids = withoutAttributes.match(/#[\w-]+/gu)?.length ?? 0;
+  const types =
+    (withoutAttributes.match(/(?:^|[\s>+~])[a-z][\w-]*/giu)?.length ?? 0) +
+    (withoutAttributes.match(/::[\w-]+/gu)?.length ?? 0);
+
+  return [ids, countClassSpecificity(selector), types];
+}
+
+function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+
+// A known limit of the atomic model (docs/atomic-output.md, "Rules that style
+// other elements"): a rule of one style for another element ties with that
+// element's own atom, so the order of the rules decides, not the model.
+async function testAtomicRulesForOtherElementsTieWithTheirOwnAtoms() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const list = css({ "& [data-on]": { opacity: 0.25 } });
+      export const item = css({ "&[data-on]": { opacity: 0.5 } });
+    `,
+    "atomic-other-elements-order.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const listSelector = readSelectorOf(
+    cssText,
+    readAtomFor(cssText, readExportedClassName(result.code, "list"), "opacity:0.25;"),
+  );
+  const itemSelector = readSelectorOf(
+    cssText,
+    readAtomFor(cssText, readExportedClassName(result.code, "item"), "opacity:0.5;"),
+  );
+
+  assert.match(listSelector, /^\.dx-[\w-]+ \[data-on\]$/u);
+  assert.match(itemSelector, /^\.dx-[\w-]+\[data-on\]$/u);
+  assert.deepEqual(countSpecificity(listSelector), [0, 2, 0]);
+  assert.deepEqual(countSpecificity(itemSelector), [0, 2, 0]);
+}
+
+// A known limit of the atomic model (docs/atomic-output.md, "Rules that style
+// other elements"): the shorthand of an ancestor's rule wins over the element's
+// own longhand in the semantic model and loses to it in the atomic model.
+async function testAtomicRulesForOtherElementsLoseToOwnLonghands() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const toolbar = css({ "& span": { padding: 4 } });
+    export const label = css({ paddingLeft: 8 });
+  `;
+  const semantic = await runWywTransform(source, "atomic-other-elements-specificity.ts");
+  const semanticCss = semantic.cssText ?? "";
+  const semanticToolbar = countSpecificity(
+    readSelectorOf(semanticCss, readExportedClassName(semantic.code, "toolbar")),
+  );
+  const semanticLabel = countSpecificity(
+    readSelectorOf(semanticCss, readExportedClassName(semantic.code, "label")),
+  );
+
+  assert.deepEqual(semanticToolbar, [0, 1, 1]);
+  assert.deepEqual(semanticLabel, [0, 1, 0]);
+  assert.ok(compareSpecificity(semanticToolbar, semanticLabel) > 0);
+
+  const atomic = await runWywTransform(source, "atomic-other-elements-specificity.ts", {
+    output: "atomic",
+  });
+  const atomicCss = atomic.cssText ?? "";
+  const atomicToolbar = countSpecificity(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "toolbar"), "padding:4px;"),
+    ),
+  );
+  const atomicLabel = countSpecificity(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "label"), "padding-left:8px;"),
+    ),
+  );
+
+  assert.deepEqual(atomicToolbar, [0, 1, 1]);
+  assert.deepEqual(atomicLabel, [0, 3, 0]);
+  assert.ok(compareSpecificity(atomicToolbar, atomicLabel) < 0);
+}
+
 async function testAtomicOrderRules() {
   const result = await runWywTransform(
     `
@@ -6325,6 +6420,8 @@ async function main() {
   await testAtomicCustomPropertiesKeepTheirCase();
   await testAtomicSelectorsMatchTheSemanticModel();
   await testAtomicStyleReferencesInsideIsAndWhere();
+  await testAtomicRulesForOtherElementsTieWithTheirOwnAtoms();
+  await testAtomicRulesForOtherElementsLoseToOwnLonghands();
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicAllowedOrders();
