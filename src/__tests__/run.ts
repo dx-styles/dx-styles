@@ -5293,6 +5293,8 @@ async function testAtomicStyleReferencesInsideIsAndWhere() {
     export const quiet = css({ ":where(&)": { color: "red" } });
     export const matched = css({ ":is(&)": { color: "red" } });
     export const nested = css({ ":is(.dark :where(&))": { color: "white" } });
+    export const themed = css({ ":is(.dark &)": { color: "white" } });
+    export const descendant = css({ ".dark &": { color: "white" } });
     export const ordered = css({
       color: "black",
       ":where(&)": { color: "gray" },
@@ -5319,6 +5321,16 @@ async function testAtomicStyleReferencesInsideIsAndWhere() {
     /^:is\(\.dark :where\((?:\.dx-[\w-]+)+\)\)$/u,
   );
   assert.equal(countClassSpecificity(selectorFor("nested", "color:white;")), 1);
+  // :is() takes the specificity of its argument (Selectors Level 4, 16.1), so
+  // `:is(.dark &)` weighs as much as `.dark &`.
+  assert.match(
+    selectorFor("themed", "color:white;"),
+    /^:is\(\.dark (?:\.dx-[\w-]+)+\)$/u,
+  );
+  assert.equal(
+    countClassSpecificity(selectorFor("themed", "color:white;")),
+    countClassSpecificity(selectorFor("descendant", "color:white;")),
+  );
 
   // The cascade of the semantic model: `:where(&)` loses to the plain style,
   // and the pseudo-class of `:is(&):hover` belongs to the styled element.
@@ -5333,6 +5345,16 @@ async function testAtomicStyleReferencesInsideIsAndWhere() {
     `export const outside = css({ ":not(&)": { color: "red" } });`,
     "atomic-errors/not-the-style.ts",
     /atomic-errors\/not-the-style\.ts: css\(\) "outside" uses the selector ":not\(\.outside_\w+\)".*output: "semantic"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const parent = css({ ":has(&)": { color: "red" } });`,
+    "atomic-errors/has-the-style.ts",
+    /atomic-errors\/has-the-style\.ts: css\(\) "parent" uses the selector ":has\(\.parent_\w+\)".*does not select the element of the style.*output: "semantic"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const either = css({ ":is(&, .card)": { color: "red" } });`,
+    "atomic-errors/is-with-others.ts",
+    /atomic-errors\/is-with-others\.ts: css\(\) "either" uses the selector ":is\(\.either_\w+, ?\.card\)".*does not select the element of the style.*output: "semantic"/su,
   );
 }
 
