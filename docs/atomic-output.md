@@ -6,8 +6,8 @@ dx-styles has two supported output models. The default, **semantic**, emits one 
 `.dx-39_vtc9dhbe{color:red;}` and `.dx-9b_dfhgmh3l{padding:4px;}`, and every other style that
 sets `color: red` reuses the first atom. The CSS stops growing with the number of components.
 
-The model is a build option. The same source builds in either model; nothing changes in how
-styles are written.
+The model is a build option. Nothing changes in how styles are written; the atomic model rejects
+a few forms that it cannot express, listed under [build errors](#build-errors-and-how-to-rewrite).
 
 ```ts
 import wyw from "@wyw-in-js/vite";
@@ -47,9 +47,11 @@ In the atomic model:
 - The cascade of atoms depends only on specificity and `!important`, never on the order of rules
   in the CSS. The fixed rules below say who wins.
 
-A style whose result would depend on the order of its declarations, or would differ from the
-semantic model, fails the build. The atomic model never emits a style that silently looks
-different, and it never falls back to a per-style class.
+For the element of the style itself, a style whose result would depend on the order of its
+declarations, or would differ from the semantic model, fails the build. The atomic model never
+emits such a style looking silently different, and it never falls back to a per-style class. A
+rule of a style for another element (`"& span"`, `"& > summary"`, `"& [data-on]"`) builds without
+that promise: see [rules that style other elements](#rules-that-style-other-elements).
 
 ## Order rules
 
@@ -386,3 +388,36 @@ that gets an atom through a style handle is listed too.
 - Class strings joined around `cx` keep both atoms of a key; nothing at build time sees that.
 - The check of exclusive conditions stops at the four forms above: `height` ranges, mixed units,
   `@supports` and `@container` conditions count as able to meet.
+- Rules of a style for another element are not compared with that element's own style; see
+  below.
+
+## Rules that style other elements
+
+A rule of a style can select another element: a descendant (`"& span"`), a child
+(`"& > summary"`), a sibling (`"& + *"`). In the atomic model it builds as before: its
+declarations become atoms with that selector. The order check compares only the declarations
+that a style sets on its own element, within one style, one recipe or a composition with handles
+that the build knows. The build does not know the DOM, so it cannot see that a rule for a
+descendant meets the descendant's own style on one property. There the result can differ from
+the semantic model, and nothing fails:
+
+- **The order of rules decides.** A list sets `"& [data-on]": { opacity: 0.25 }`, and the item has
+  its own `"&[data-on]": { opacity: 0.5 }`. Both atoms, `.<atom> [data-on]` and
+  `.<atom>[data-on]`, have the specificity (0,2,0), so the later rule wins. In the semantic model
+  that is the order of the stylesheets of the modules. In the atomic model an atom is shared, and
+  the minifier keeps its last copy, so another module that repeats the atom decides where it
+  ends up: the semantic model gives `0.25`, the atomic one can give `0.5`.
+- **A longhand wins over a shorthand of the ancestor.** A toolbar sets `"& span": { padding: 4 }`,
+  and the label inside has its own `paddingLeft: 8`. In the semantic model `.toolbar span` (0,1,1)
+  beats `.label` (0,1,0), and `padding-left` is `4px`. In the atomic model the longhand of the
+  label repeats its class three times, (0,3,0), and beats the toolbar's atom (0,1,1): `8px`.
+
+To keep both models equal, let the ancestor set a CSS variable and the element read it in its own
+style. Then only the element's style sets the property:
+
+```ts
+const list = css({ "& [data-on]": { "--item-opacity": "0.25" } });
+const item = css({ "&[data-on]": { opacity: "var(--item-opacity, 0.5)" } });
+```
+
+A variable from `createVar` works the same way.
