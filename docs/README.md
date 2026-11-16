@@ -23,6 +23,7 @@ The authoring API is small:
 - [Runtime values](./runtime-values.md)
 - [RTL authoring](./rtl.md)
 - [WyW integration](./wyw-integration.md)
+- [Atomic output](./atomic-output.md)
 - [Explain tooling](./explain.md)
 - [Release process](./release-process.md)
 

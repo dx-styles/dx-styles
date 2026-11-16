@@ -1,6 +1,10 @@
 import type { PropertiesFallback } from "csstype";
 
-import { DX_STYLES_DESCRIPTOR_KEY, STYLE_HANDLE_DESCRIPTOR_KIND } from "./style-handle-contract.js";
+import {
+  composeAtomicClassNames,
+  DX_STYLES_DESCRIPTOR_KEY,
+  STYLE_HANDLE_DESCRIPTOR_KIND,
+} from "./style-handle-contract.js";
 import { createStyleHandleRegistry, normalizeStyleHandleClassName } from "./style-handle-support";
 
 export { DX_STYLES_DESCRIPTOR_KEY, STYLE_HANDLE_DESCRIPTOR_KIND } from "./style-handle-contract.js";
@@ -533,13 +537,7 @@ export function hashString(source: string): string {
 }
 
 export function cx(...classNames: readonly (false | null | string | undefined)[]): string {
-  const tokens = classNames.flatMap((token) => {
-    return typeof token === "string"
-      ? token.split(/\s+/u).filter((className) => className.length > 0)
-      : [];
-  });
-
-  return Array.from(new Set(tokens)).join(" ");
+  return composeAtomicClassNames(...classNames);
 }
 
 export function toCssClassName(value: string): CssClassName {

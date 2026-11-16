@@ -3,6 +3,7 @@ import type { ExpressionValue } from "@wyw-in-js/shared";
 
 import { toCSS } from "./serialization.js";
 import {
+  assertNotAtomShapedClassName,
   BaseProcessor,
   collectDependencies,
   createExplainArtifact,
@@ -40,6 +41,7 @@ export default class CreateThemeProcessor extends BaseProcessor {
   }
 
   build(values: ValueCache): void {
+    assertNotAtomShapedClassName(this.className);
     const [contractExpression, valueExpression] = this.expressions;
     const contract = resolveExpressionValue(contractExpression, values);
     const themeValues = resolveExpressionValue(valueExpression, values);

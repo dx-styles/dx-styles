@@ -2,22 +2,27 @@ import type { TailProcessorParams, ValueCache } from "@wyw-in-js/processor-utils
 import type { ExpressionValue } from "@wyw-in-js/shared";
 
 import {
+  assertNotAtomShapedClassName,
   BaseProcessor,
+  checkAtomicStyleOrder,
   collectComposeRefs,
   collectDependencies,
   collectStyleHandleClassNames,
   composeClassNames,
+  createAtomicStylePart,
   createExplainArtifact,
   createImportedPreevalCallNode,
   createPreevalCallNode,
   createRuntimeClassName,
   getCallExpressions,
   normalizeStyleParts,
+  readOutputModel,
   registerExtractedStyle,
   reportStylePartDiagnostics,
   resolveExpressionValue,
   ruleForSelector,
   shouldEmitLocalStyleRule,
+  shouldMinifyClassNames,
   toCSSStyle,
 } from "./shared.js";
 
@@ -52,6 +57,7 @@ export default class CssProcessor extends BaseProcessor {
   }
 
   build(values: ValueCache): void {
+    assertNotAtomShapedClassName(this.className);
     const resolvedParts = this.expressions.map((expression) =>
       resolveExpressionValue(expression, values),
     );
@@ -59,6 +65,12 @@ export default class CssProcessor extends BaseProcessor {
       reportStylePartDiagnostics(this, part, "css()");
     });
     const composeRefs = collectComposeRefs(resolvedParts);
+
+    if (readOutputModel(this.options) === "atomic") {
+      this.buildAtomic(resolvedParts, composeRefs);
+      return;
+    }
+
     const styleHandleClassNames = collectStyleHandleClassNames(resolvedParts);
     this.resolvedStyle = normalizeStyleParts(resolvedParts);
     const shouldEmitLocalRule = shouldEmitLocalStyleRule(this.resolvedStyle, styleHandleClassNames);
@@ -86,6 +98,35 @@ export default class CssProcessor extends BaseProcessor {
         {
           className: this.className,
           composeRefs,
+          kind: "css",
+          node: "style",
+          preevalClassName: createRuntimeClassName("dxs", this.resolvedStyle),
+        },
+      ]),
+    );
+  }
+
+  private buildAtomic(resolvedParts: readonly unknown[], composeRefs: readonly string[]): void {
+    const part = createAtomicStylePart({
+      className: this.className,
+      context: this.context,
+      displayName: this.displayName,
+      location: this.location,
+      minify: shouldMinifyClassNames(this.options),
+      parts: resolvedParts,
+      place: `css() "${this.displayName}"`,
+    });
+    checkAtomicStyleOrder(this.context, part.cascadeParts);
+    this.resolvedStyle = normalizeStyleParts(resolvedParts);
+    this.runtimeClassName = part.className;
+    registerExtractedStyle(this.className, this.resolvedStyle);
+    this.artifacts.push(["css", [part.rules, []]]);
+    this.artifacts.push(
+      createExplainArtifact([
+        {
+          atoms: part.atoms,
+          className: this.className,
+          composeRefs: [...composeRefs],
           kind: "css",
           node: "style",
           preevalClassName: createRuntimeClassName("dxs", this.resolvedStyle),

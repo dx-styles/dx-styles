@@ -1,13 +1,17 @@
 import type { TailProcessorParams, ValueCache } from "@wyw-in-js/processor-utils";
-import type { ExpressionValue } from "@wyw-in-js/shared";
+import type { ExpressionValue, ICSSRule } from "@wyw-in-js/shared";
 
+import type { SlotRecipeExplainEntry } from "./explain-schema.js";
 import { createValueNode } from "./serialization.js";
 import {
+  assertNotAtomShapedClassName,
+  type AtomicRecipeNode,
   BaseProcessor,
   collectComposeRefs,
   collectDependencies,
   collectStringMatches,
   collectStyleHandleClassNames,
+  createAtomicRecipeNodes,
   createExplainArtifact,
   createImportedPreevalCallNode,
   createPreevalCallNode,
@@ -18,6 +22,7 @@ import {
   expectSlotStyleMap,
   getCallExpressions,
   normalizeStyleParts,
+  readOutputModel,
   reportStylePartDiagnostics,
   resolveExpressionValue,
   ruleForSelector,
@@ -61,6 +66,26 @@ export default class SlotRecipeProcessor extends BaseProcessor {
       config,
       shouldMinifyClassNames(this.options),
     );
+    [
+      this.className,
+      ...Object.values(localRuntimeDefinition.baseClassNames),
+      ...Object.values(localRuntimeDefinition.variants).flatMap((values) =>
+        Object.values(values).flatMap((classNames) => Object.values(classNames)),
+      ),
+      ...localRuntimeDefinition.compoundVariants.flatMap(({ classNames }) =>
+        Object.values(classNames),
+      ),
+    ].forEach((className) => {
+      if (className.length > 0) {
+        assertNotAtomShapedClassName(className);
+      }
+    });
+
+    if (readOutputModel(this.options) === "atomic") {
+      this.buildAtomic(config, localRuntimeDefinition);
+      return;
+    }
+
     const explainEntries: DxStylesExplainEntry[] = [];
     const baseStyles =
       config.base === undefined ? {} : expectSlotStyleMap(config.base, config.slots, "base");
@@ -259,6 +284,146 @@ export default class SlotRecipeProcessor extends BaseProcessor {
         });
       }
     });
+
+    if (explainEntries.length > 0) {
+      this.artifacts.push(createExplainArtifact(explainEntries));
+    }
+  }
+
+  private buildAtomic(
+    config: ReturnType<typeof expectSlotRecipeConfig>,
+    localRuntimeDefinition: ReturnType<typeof createSlotRecipeRuntimeDefinition>,
+  ): void {
+    const isDefined = (style: unknown) => style !== undefined && style !== null && style !== false;
+    const baseStyles =
+      config.base === undefined ? {} : expectSlotStyleMap(config.base, config.slots, "base");
+    const classNames = new Map<string, string>();
+    const explainEntries: DxStylesExplainEntry[] = [];
+    let rules: Record<string, ICSSRule> = {};
+
+    for (const slot of config.slots) {
+      const nodes: (AtomicRecipeNode & { readonly entry: SlotRecipeExplainEntry })[] = [];
+      const slotBase = baseStyles[slot];
+
+      if (isDefined(slotBase)) {
+        reportStylePartDiagnostics(this, slotBase, `slotRecipe() base slot "${slot}"`);
+        const className = localRuntimeDefinition.baseClassNames[slot];
+        nodes.push({
+          className,
+          displayName: `${this.displayName}Base${slot}`,
+          entry: {
+            className,
+            composeRefs: collectComposeRefs([slotBase]),
+            kind: "slotRecipe",
+            node: "base",
+            slot,
+          },
+          node: "base",
+          place: `slotRecipe() "${this.displayName}" base slot "${slot}"`,
+          style: slotBase,
+        });
+      }
+
+      for (const axis of localRuntimeDefinition.variantOrder) {
+        for (const [value, styles] of Object.entries(config.variants?.[axis] ?? {})) {
+          const slotStyle = expectSlotStyleMap(styles, config.slots, `variant "${axis}.${value}"`)[slot];
+          if (!isDefined(slotStyle)) {
+            continue;
+          }
+
+          reportStylePartDiagnostics(
+            this,
+            slotStyle,
+            `slotRecipe() variant "${axis}.${value}" slot "${slot}"`,
+          );
+          const className = localRuntimeDefinition.variants[axis][value][slot];
+          nodes.push({
+            className,
+            displayName: `${this.displayName}${axis}${value}${slot}`,
+            entry: {
+              className,
+              composeRefs: collectComposeRefs([slotStyle]),
+              kind: "slotRecipe",
+              node: "variant",
+              slot,
+              variant: { axis, value },
+            },
+            node: "variant",
+            place: `slotRecipe() "${this.displayName}" variant "${axis}.${value}" slot "${slot}"`,
+            style: slotStyle,
+            variant: { axis, value },
+          });
+        }
+      }
+
+      localRuntimeDefinition.compoundVariants.forEach((compoundVariant, index) => {
+        const slotStyle = expectSlotStyleMap(
+          config.compoundVariants?.[index]?.css,
+          config.slots,
+          `compound variant #${index} css`,
+        )[slot];
+        if (!isDefined(slotStyle)) {
+          return;
+        }
+
+        reportStylePartDiagnostics(
+          this,
+          slotStyle,
+          `slotRecipe() compound variant #${index} slot "${slot}"`,
+        );
+        const className = compoundVariant.classNames[slot];
+        nodes.push({
+          className,
+          displayName: `${this.displayName}Compound${index}${slot}`,
+          entry: {
+            className,
+            composeRefs: collectComposeRefs([slotStyle]),
+            kind: "slotRecipe",
+            matches: { ...compoundVariant.matches },
+            node: "compound",
+            slot,
+          },
+          matches: compoundVariant.matches,
+          node: "compound",
+          place: `slotRecipe() "${this.displayName}" compound variant #${index} slot "${slot}"`,
+          style: slotStyle,
+        });
+      });
+
+      const built = createAtomicRecipeNodes(
+        this.context,
+        this.location,
+        shouldMinifyClassNames(this.options),
+        nodes,
+      );
+      rules = { ...rules, ...built.rules };
+      nodes.forEach((node, index) => {
+        classNames.set(node.className, built.parts[index].className);
+        explainEntries.push({ ...node.entry, atoms: built.parts[index].atoms });
+      });
+    }
+
+    const classNameOf = (className: string) => classNames.get(className) ?? className;
+    const mapSlots = (record: Record<string, string>) =>
+      Object.fromEntries(Object.entries(record).map(([slot, name]) => [slot, classNameOf(name)]));
+
+    this.runtimeDefinition = {
+      ...localRuntimeDefinition,
+      baseClassNames: mapSlots(localRuntimeDefinition.baseClassNames),
+      compoundVariants: localRuntimeDefinition.compoundVariants.map((compoundVariant) => ({
+        ...compoundVariant,
+        classNames: mapSlots(compoundVariant.classNames),
+      })),
+      variants: Object.fromEntries(
+        Object.entries(localRuntimeDefinition.variants).map(([axis, values]) => [
+          axis,
+          Object.fromEntries(
+            Object.entries(values).map(([value, slotClassNames]) => [value, mapSlots(slotClassNames)]),
+          ),
+        ]),
+      ),
+    };
+    this.artifacts.push(["css", [rules, []]]);
 
     if (explainEntries.length > 0) {
       this.artifacts.push(createExplainArtifact(explainEntries));

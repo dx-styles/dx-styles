@@ -183,6 +183,13 @@ async function runWywTransform(
     readonly minifyClassNames?: boolean;
     readonly evalStrategy?: "execute" | "hybrid" | "static";
     readonly eventEmitter?: EventEmitter;
+    readonly output?: "atomic" | "semantic";
+    readonly prefixer?: boolean;
+    readonly preprocessor?: "none" | "stylis" | ((selector: string, cssText: string) => string);
+    /** Plugin options next to the dx-styles ones, as a WyW config file gives them. */
+    readonly pluginOptions?: Record<string, unknown>;
+    readonly classNameSlug?: string | ((hash: string, title: string) => string);
+    readonly root?: string;
   } = {},
 ) {
   const filename = isAbsolute(fixtureName)
@@ -197,8 +204,11 @@ async function runWywTransform(
         eventEmitter: options.eventEmitter,
         options: {
           filename,
-          root: process.cwd(),
+          root: options.root ?? process.cwd(),
+          ...(options.prefixer === undefined ? {} : { prefixer: options.prefixer }),
+          ...(options.preprocessor === undefined ? {} : { preprocessor: options.preprocessor }),
           pluginOptions: {
+            ...options.pluginOptions,
             configFile: false,
             displayName: options.displayName ?? true,
             ...(options.evalStrategy === undefined
@@ -207,7 +217,13 @@ async function runWywTransform(
             importOverrides: {
               "./preeval-runtime.js": { unknown: "allow" },
             },
-            processors: { dxStyles: { minifyClassNames: options.minifyClassNames ?? false } },
+            processors: {
+              dxStyles: {
+                minifyClassNames: options.minifyClassNames ?? false,
+                ...(options.output === undefined ? {} : { output: options.output }),
+              },
+            },
+            ...(options.classNameSlug === undefined ? {} : { classNameSlug: options.classNameSlug }),
             outputMetadata: options.outputMetadata ?? false,
             features: {
               happyDOM: false,
@@ -1062,6 +1078,46 @@ function testRuntimeHelpers() {
       },
     });
   }, /slotRecipe\(\) compound variant #0 css references unknown slot "body"/u);
+}
+
+function testCxKeepsLastAtomPerKey() {
+  const tokensOf = (className: string) => className.split(" ").sort();
+
+  // Literal atoms of the documented shape `dx-<key>_<value>`: keys `0a` and `0b`
+  // are table property codes, `0a1234567` adds a condition code, `z1234567` is a
+  // hashed property code.
+  assert.deepEqual(
+    tokensOf(cx("dx-0a_aaaaaaaa dx-0b_bbbbbbbb", "dx-0a_cccccccc")),
+    ["dx-0a_cccccccc", "dx-0b_bbbbbbbb"],
+  );
+  assert.deepEqual(
+    tokensOf(cx("dx-0a_aaaaaaaa", "dx-0a1234567_bbbbbbbb", "dx-z1234567_cccccccc")),
+    ["dx-0a1234567_bbbbbbbb", "dx-0a_aaaaaaaa", "dx-z1234567_cccccccc"],
+  );
+  assert.deepEqual(
+    tokensOf(cx("dx-z1234567_aaaaaaaa", "dx-z1234567abcdefg_bbbbbbbb", "dx-z1234567_cccccccc")),
+    ["dx-z1234567_cccccccc", "dx-z1234567abcdefg_bbbbbbbb"],
+  );
+  assert.equal(cx("dx-0a_aaaaaaaa", "dx-0a_aaaaaaaa"), "dx-0a_aaaaaaaa");
+
+  // Class names of the semantic model sit next to atoms and are never dropped.
+  assert.deepEqual(tokensOf(cx("button_abc dx-0a_aaaaaaaa", "button_abc dx-0a_cccccccc")), [
+    "button_abc",
+    "dx-0a_cccccccc",
+  ]);
+  assert.equal(cx("a b", "b c", false, null, undefined), "a b c");
+
+  // Tokens that only look close to an atom are ordinary class names.
+  assert.equal(cx("dx-0a_short", "dx-0a_other"), "dx-0a_short dx-0a_other");
+  assert.equal(cx("dx-za_aaaaaaaa", "dx-za_bbbbbbbb"), "dx-za_aaaaaaaa dx-za_bbbbbbbb");
+  assert.equal(cx("dx-0A_aaaaaaaa", "dx-0A_bbbbbbbb"), "dx-0A_aaaaaaaa dx-0A_bbbbbbbb");
+  assert.equal(cx("dx-0a12_aaaaaaaa", "dx-0a12_bbbbbbbb"), "dx-0a12_aaaaaaaa dx-0a12_bbbbbbbb");
+
+  // css() composes style handles by the same rule: a handle given again wins.
+  const red = createStyleHandle("dx-0a_aaaaaaaa");
+  const blue = createStyleHandle("dx-0a_bbbbbbbb");
+  assert.equal(css(red, blue, red), "dx-0a_aaaaaaaa");
+  assert.equal(css(blue, red, blue), "dx-0a_bbbbbbbb");
 }
 
 function testRuntimeKeyframes() {
@@ -4966,8 +5022,1884 @@ async function testSharedLibraryBuildPreservesIgnoredSourceDeclarations() {
   }
 }
 
+// The documented shape of an atom class name (docs/atomic-output.md).
+const ATOM_SHAPE = /^dx-(?:[0-9a-y][0-9a-z]|z[0-9a-z]{7})(?:[0-9a-z]{7})?_[0-9a-z]{8}$/u;
+
+function readExportedClassName(code: string, name: string): string {
+  const match = new RegExp(`export const ${name} = "([^"]*)"`, "u").exec(code);
+  assert.ok(match, code);
+  return match[1];
+}
+
+function readAtoms(className: string): string[] {
+  return className.split(" ").filter((token) => ATOM_SHAPE.test(token));
+}
+
+function readAtomKeyLength(atom: string): number {
+  return atom.slice("dx-".length, atom.indexOf("_")).length;
+}
+
+/** The innermost rules of a stylesheet whose selector names the class. */
+function readRulesOf(cssText: string, className: string): string[] {
+  return Array.from(cssText.matchAll(/([^{}]+)\{([^{}]*)\}/gu))
+    .filter(([, selector]) => new RegExp(`\\.${className}(?![\\w-])`, "u").test(selector))
+    .map(([rule]) => rule.trim());
+}
+
+function readSelectorOf(cssText: string, className: string): string {
+  const [rule] = readRulesOf(cssText, className);
+  assert.ok(rule, `no rule for ${className} in ${cssText}`);
+  return rule.slice(0, rule.indexOf("{")).trim();
+}
+
+/**
+ * Class-level specificity of a selector by the CSS definition: classes,
+ * attributes and pseudo-classes, where `:not(x)` and `:is(x)` count as their
+ * argument and `:where()` counts as nothing.
+ */
+function countClassSpecificity(selector: string): number {
+  const withoutWhere = selector.replace(/:where\([^)]*\)/gu, "");
+  const classes = withoutWhere.match(/\.[\w-]+/gu)?.length ?? 0;
+  const attributes = withoutWhere.match(/\[[^\]]*\]/gu)?.length ?? 0;
+  const pseudoClasses =
+    withoutWhere.match(/(?<!:):(?!:)(?!not\(|is\(|where\()[\w-]+/gu)?.length ?? 0;
+
+  return classes + attributes + pseudoClasses;
+}
+
+function readAtomFor(cssText: string, className: string, declaration: string): string {
+  const atom = readAtoms(className).find((candidate) =>
+    readRulesOf(cssText, candidate).some((rule) => rule.includes(`{${declaration}`)),
+  );
+  assert.ok(atom, `no atom for ${declaration} in ${className}\n${cssText}`);
+  return atom;
+}
+
+function readSpecificityOf(cssText: string, className: string, declaration: string): number {
+  return countClassSpecificity(
+    readSelectorOf(cssText, readAtomFor(cssText, className, declaration)),
+  );
+}
+
+async function testSemanticOutputIsUnchanged() {
+  const source = `
+    import { createTheme, createTokenContract, css, keyframes, recipe, slotRecipe } from "dx-styles";
+
+    const spin = keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });
+    const vars = createTokenContract({ color: { fg: null } }, { prefix: "app" });
+    export const theme = createTheme(vars, { color: { fg: "black" } });
+
+    export const base = css({
+      color: "red",
+      padding: 4,
+      animationName: spin,
+      "&:hover": { color: "blue" },
+      "@media (width >= 40rem)": { padding: 8 },
+    });
+
+    export const button = recipe({
+      base: { display: "flex" },
+      variants: { tone: { accent: { color: "green" }, muted: { color: "gray" } } },
+      compoundVariants: [{ tone: "accent", css: { fontWeight: 700 } }],
+      defaultVariants: { tone: "accent" },
+    });
+
+    export const card = slotRecipe({
+      slots: ["root", "title"],
+      base: { root: { display: "grid" }, title: { margin: 0 } },
+      variants: { size: { sm: { title: { fontSize: 12 } } } },
+    });
+  `;
+
+  for (const minifyClassNames of [false, true]) {
+    const withoutOption = await runWywTransform(source, "semantic-default.ts", { minifyClassNames });
+    const semantic = await runWywTransform(source, "semantic-default.ts", {
+      minifyClassNames,
+      output: "semantic",
+    });
+
+    assert.equal(semantic.code, withoutOption.code);
+    assert.equal(semantic.cssText, withoutOption.cssText);
+    assert.equal(ATOM_SHAPE.test(readExportedClassName(semantic.code, "base")), false);
+  }
+}
+
+async function testAtomicCssEmitsOneAtomPerDeclaration() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const first = css({ color: "red", padding: 4 });
+      export const second = css({ color: "blue" });
+      export const conditional = css({
+        "&:hover": { color: "red" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+      export const custom = css({
+        "--accent": "red",
+        "&:hover": { "--accent": "blue" },
+      });
+    `,
+    "atomic-basic/styles.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const first = readExportedClassName(result.code, "first");
+  const second = readExportedClassName(result.code, "second");
+
+  assert.equal(readAtoms(first).length, 2, first);
+  assert.equal(readAtoms(second).length, 1, second);
+  assert.ok(cssText.includes(`.${readAtomFor(cssText, first, "color:red;")}{color:red;}`), cssText);
+  assert.ok(cssText.includes(`.${readAtomFor(cssText, first, "padding:4px;")}{padding:4px;}`), cssText);
+  assert.notEqual(readAtomFor(cssText, first, "color:red;"), readAtoms(second)[0]);
+
+  // A declaration without a condition has a 2-character key, with a condition 9.
+  readAtoms(first).forEach((atom) => assert.equal(readAtomKeyLength(atom), 2, atom));
+  const conditional = readAtoms(readExportedClassName(result.code, "conditional"));
+  assert.equal(conditional.length, 2);
+  conditional.forEach((atom) => assert.equal(readAtomKeyLength(atom), 9, atom));
+  // A custom property is outside the code table: 8 characters, 15 with a condition.
+  assert.deepEqual(
+    readAtoms(readExportedClassName(result.code, "custom")).map(readAtomKeyLength).sort(),
+    [15, 8],
+  );
+
+  // No rule carries the class of a style: its declarations live in the atoms.
+  assert.equal(readRulesOf(cssText, first.split(" ")[0]).length, 0, cssText);
+  assert.match(first, /^first_\S+ /u);
+}
+
+async function testAtomicNamesDependOnlyOnTheDeclaration() {
+  const one = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const panel = css({
+        color: "red",
+        backgroundImage: "url(./a.png)",
+        cursor: "url(icon.svg), auto",
+        listStyleImage: "url(/marker.svg)",
+      });
+    `,
+    "atomic-names/one/panel.ts",
+    { output: "atomic" },
+  );
+  const two = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const otherName = css({
+        color: "red",
+        backgroundImage: "url(./a.png)",
+        cursor: "url(icon.svg), auto",
+        listStyleImage: "url(/marker.svg)",
+      });
+    `,
+    "atomic-names/two/other.ts",
+    { displayName: false, minifyClassNames: true, output: "atomic" },
+  );
+  const oneCss = one.cssText ?? "";
+  const twoCss = two.cssText ?? "";
+  const onePanel = readExportedClassName(one.code, "panel");
+  const twoPanel = readExportedClassName(two.code, "otherName");
+  const oneColor = readAtomFor(oneCss, onePanel, "color:red;");
+  const twoColor = readAtomFor(twoCss, twoPanel, "color:red;");
+
+  assert.equal(oneColor, twoColor);
+  assert.deepEqual(readRulesOf(oneCss, oneColor), readRulesOf(twoCss, twoColor));
+
+  // One relative url() in two directories names two different images.
+  const oneImage = readAtomFor(oneCss, onePanel, "background-image:");
+  const twoImage = readAtomFor(twoCss, twoPanel, "background-image:");
+  assert.notEqual(oneImage, twoImage);
+  // So does a relative url() without a leading dot; a root-relative one does not.
+  assert.notEqual(
+    readAtomFor(oneCss, onePanel, "cursor:url(icon.svg),auto;"),
+    readAtomFor(twoCss, twoPanel, "cursor:url(icon.svg),auto;"),
+  );
+  assert.equal(
+    readAtomFor(oneCss, onePanel, "list-style-image:url(/marker.svg);"),
+    readAtomFor(twoCss, twoPanel, "list-style-image:url(/marker.svg);"),
+  );
+}
+
+async function testAtomicCustomPropertiesKeepTheirCase() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      const upper = css({ "--accentColor": "red" });
+      const lower = css({ "--accentcolor": "blue" });
+      export const both = css(upper, lower, { color: "var(--accentColor)" });
+    `,
+    "atomic-custom-case.ts",
+    { output: "atomic" },
+  );
+  const both = readExportedClassName(result.code, "both");
+
+  assert.deepEqual(readAtomDeclarations(result.cssText ?? "", both), [
+    "--accentColor:red;",
+    "--accentcolor:blue;",
+    "color:var(--accentColor);",
+  ]);
+}
+
+async function testAtomicSelectorsMatchTheSemanticModel() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const page = css({
+      color: "black",
+      ":global(body)": { margin: 0 },
+      "& :global(.dark)": { color: "white" },
+    });
+    export const labelled = css({ '&[data-label="a  b"]': { color: "teal" } });
+    export const ampersand = css({
+      "&:hover": { color: "blue" },
+      '[data-label="&"] &:hover': { color: "red" },
+    });
+  `;
+  const semantic = await runWywTransform(source, "atomic-selectors.ts");
+  const atomic = await runWywTransform(source, "atomic-selectors.ts", { output: "atomic" });
+  const semanticCss = semantic.cssText ?? "";
+  const atomicCss = atomic.cssText ?? "";
+  const page = readExportedClassName(atomic.code, "page");
+
+  // A :global() selector without & is a global rule in both models.
+  const [globalRule] = /body\s*\{[^}]*\}/u.exec(semanticCss) ?? [];
+  assert.ok(globalRule, semanticCss);
+  assert.ok(atomicCss.includes(globalRule), atomicCss);
+  assert.deepEqual(readAtomDeclarations(atomicCss, page), ["color:black;", "color:white;"]);
+  assert.match(readSelectorOf(atomicCss, readAtomFor(atomicCss, page, "color:white;")), /^\.dark \.dx-/u);
+  // Whitespace inside a quoted attribute value is part of the value.
+  assert.match(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "labelled"), "color:teal;"),
+    ),
+    /\[data-label="a {2}b"\]$/u,
+  );
+  // An ampersand inside an attribute value is text, not the styled element.
+  const ampersand = readExportedClassName(atomic.code, "ampersand");
+  const ampersandSelector = readSelectorOf(
+    atomicCss,
+    readAtomFor(atomicCss, ampersand, "color:red;"),
+  );
+  assert.match(ampersandSelector, /^\[data-label="&"\] (?:\.dx-[\w-]+)+:hover$/u);
+  assert.equal(
+    countClassSpecificity(ampersandSelector),
+    readSpecificityOf(atomicCss, ampersand, "color:blue;") + 1,
+  );
+}
+
+async function testAtomicStyleReferencesInsideIsAndWhere() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const quiet = css({ ":where(&)": { color: "red" } });
+    export const matched = css({ ":is(&)": { color: "red" } });
+    export const nested = css({ ":is(.dark :where(&))": { color: "white" } });
+    export const themed = css({ ":is(.dark &)": { color: "white" } });
+    export const descendant = css({ ".dark &": { color: "white" } });
+    export const ordered = css({
+      color: "black",
+      ":where(&)": { color: "gray" },
+      "@media (width >= 40rem)": { color: "red" },
+      ":is(&):hover": { color: "blue" },
+    });
+  `;
+  const semanticCss = (await runWywTransform(source, "atomic-is-where.ts")).cssText ?? "";
+  const atomic = await runWywTransform(source, "atomic-is-where.ts", { output: "atomic" });
+  const atomicCss = atomic.cssText ?? "";
+  const selectorFor = (name: string, declaration: string) =>
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, name), declaration),
+    );
+
+  assert.ok(semanticCss.includes(":where(.quiet_"), semanticCss);
+  assert.match(selectorFor("quiet", "color:red;"), /^:where\((?:\.dx-[\w-]+)+\)$/u);
+  assert.equal(countClassSpecificity(selectorFor("quiet", "color:red;")), 0);
+  assert.match(selectorFor("matched", "color:red;"), /^:is\((?:\.dx-[\w-]+)+\)$/u);
+  assert.ok(countClassSpecificity(selectorFor("matched", "color:red;")) >= 1);
+  assert.match(
+    selectorFor("nested", "color:white;"),
+    /^:is\(\.dark :where\((?:\.dx-[\w-]+)+\)\)$/u,
+  );
+  assert.equal(countClassSpecificity(selectorFor("nested", "color:white;")), 1);
+  // :is() takes the specificity of its argument (Selectors Level 4, 16.1), so
+  // `:is(.dark &)` weighs as much as `.dark &`.
+  assert.match(
+    selectorFor("themed", "color:white;"),
+    /^:is\(\.dark (?:\.dx-[\w-]+)+\)$/u,
+  );
+  assert.equal(
+    countClassSpecificity(selectorFor("themed", "color:white;")),
+    countClassSpecificity(selectorFor("descendant", "color:white;")),
+  );
+
+  // The cascade of the semantic model: `:where(&)` loses to the plain style,
+  // and the pseudo-class of `:is(&):hover` belongs to the styled element.
+  const ordered = readExportedClassName(atomic.code, "ordered");
+  const specificity = (declaration: string) =>
+    readSpecificityOf(atomicCss, ordered, declaration);
+  assert.ok(specificity("color:gray;") < specificity("color:black;"));
+  assert.ok(specificity("color:blue;") > specificity("color:red;"));
+
+  // A reference that does not select the styled element still fails, with its place.
+  await assertAtomicBuildFails(
+    `export const outside = css({ ":not(&)": { color: "red" } });`,
+    "atomic-errors/not-the-style.ts",
+    /atomic-errors\/not-the-style\.ts: css\(\) "outside" uses the selector ":not\(\.outside_\w+\)".*output: "semantic"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const parent = css({ ":has(&)": { color: "red" } });`,
+    "atomic-errors/has-the-style.ts",
+    /atomic-errors\/has-the-style\.ts: css\(\) "parent" uses the selector ":has\(\.parent_\w+\)".*does not select the element of the style.*output: "semantic"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const either = css({ ":is(&, .card)": { color: "red" } });`,
+    "atomic-errors/is-with-others.ts",
+    /atomic-errors\/is-with-others\.ts: css\(\) "either" uses the selector ":is\(\.either_\w+, ?\.card\)".*does not select the element of the style.*output: "semantic"/su,
+  );
+}
+
+/**
+ * Specificity (a, b, c) of a compound-only or descendant selector without
+ * functional pseudo-classes, by Selectors Level 4 §16: IDs; classes,
+ * attributes and pseudo-classes; type selectors and pseudo-elements.
+ */
+function countSpecificity(selector: string): [number, number, number] {
+  assert.doesNotMatch(selector, /:(?:not|is|where|has)\(/u, selector);
+  const withoutAttributes = selector.replace(/\[[^\]]*\]/gu, "[]");
+  const ids = withoutAttributes.match(/#[\w-]+/gu)?.length ?? 0;
+  const types =
+    (withoutAttributes.match(/(?:^|[\s>+~])[a-z][\w-]*/giu)?.length ?? 0) +
+    (withoutAttributes.match(/::[\w-]+/gu)?.length ?? 0);
+
+  return [ids, countClassSpecificity(selector), types];
+}
+
+function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+
+// A known limit of the atomic model (docs/atomic-output.md, "Rules that style
+// other elements"): a rule of one style for another element ties with that
+// element's own atom, so the order of the rules decides, not the model.
+async function testAtomicRulesForOtherElementsTieWithTheirOwnAtoms() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const list = css({ "& [data-on]": { opacity: 0.25 } });
+      export const item = css({ "&[data-on]": { opacity: 0.5 } });
+    `,
+    "atomic-other-elements-order.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const listSelector = readSelectorOf(
+    cssText,
+    readAtomFor(cssText, readExportedClassName(result.code, "list"), "opacity:0.25;"),
+  );
+  const itemSelector = readSelectorOf(
+    cssText,
+    readAtomFor(cssText, readExportedClassName(result.code, "item"), "opacity:0.5;"),
+  );
+
+  assert.match(listSelector, /^\.dx-[\w-]+ \[data-on\]$/u);
+  assert.match(itemSelector, /^\.dx-[\w-]+\[data-on\]$/u);
+  assert.deepEqual(countSpecificity(listSelector), [0, 2, 0]);
+  assert.deepEqual(countSpecificity(itemSelector), [0, 2, 0]);
+}
+
+// A known limit of the atomic model (docs/atomic-output.md, "Rules that style
+// other elements"): the shorthand of an ancestor's rule wins over the element's
+// own longhand in the semantic model and loses to it in the atomic model.
+async function testAtomicRulesForOtherElementsLoseToOwnLonghands() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const toolbar = css({ "& span": { padding: 4 } });
+    export const label = css({ paddingLeft: 8 });
+  `;
+  const semantic = await runWywTransform(source, "atomic-other-elements-specificity.ts");
+  const semanticCss = semantic.cssText ?? "";
+  const semanticToolbar = countSpecificity(
+    readSelectorOf(semanticCss, readExportedClassName(semantic.code, "toolbar")),
+  );
+  const semanticLabel = countSpecificity(
+    readSelectorOf(semanticCss, readExportedClassName(semantic.code, "label")),
+  );
+
+  assert.deepEqual(semanticToolbar, [0, 1, 1]);
+  assert.deepEqual(semanticLabel, [0, 1, 0]);
+  assert.ok(compareSpecificity(semanticToolbar, semanticLabel) > 0);
+
+  const atomic = await runWywTransform(source, "atomic-other-elements-specificity.ts", {
+    output: "atomic",
+  });
+  const atomicCss = atomic.cssText ?? "";
+  const atomicToolbar = countSpecificity(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "toolbar"), "padding:4px;"),
+    ),
+  );
+  const atomicLabel = countSpecificity(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "label"), "padding-left:8px;"),
+    ),
+  );
+
+  assert.deepEqual(atomicToolbar, [0, 1, 1]);
+  assert.deepEqual(atomicLabel, [0, 3, 0]);
+  assert.ok(compareSpecificity(atomicToolbar, atomicLabel) < 0);
+}
+
+// The order check compares the declarations a style sets on its own element:
+// a rule of the same style for a descendant, a child or a sibling is not on
+// that element, so it builds in the atomic model as in the semantic one.
+async function testAtomicOrderCheckSkipsRulesForOtherElements() {
+  const source = `
+    import { css, recipe } from "dx-styles";
+
+    export const box = css({
+      paddingTop: 8,
+      "& span": { padding: 4 },
+      "& > summary": { padding: 2 },
+      "& + *": { padding: 1 },
+      "&:hover": { color: "blue" },
+      "& a:hover": { color: "navy" },
+    });
+    export const button = recipe({
+      base: { paddingTop: 8 },
+      variants: { size: { small: { "& svg": { padding: 0 } } } },
+    });
+  `;
+
+  await runWywTransform(source, "atomic-other-elements-check.ts");
+  const atomic = await runWywTransform(source, "atomic-other-elements-check.ts", {
+    output: "atomic",
+  });
+  const atomicCss = atomic.cssText ?? "";
+
+  assert.match(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "box"), "padding:4px;"),
+    ),
+    /^\.dx-[\w-]+ span$/u,
+  );
+
+  // A selector whose subject is the styled element stays in the check.
+  await assertAtomicBuildFails(
+    `export const box = css({ paddingTop: 8, ".dark &": { padding: 4 } });`,
+    "atomic-errors/own-element-in-context.ts",
+    /"padding-top: 8px".*"padding: 4px" under "\.dark &"/su,
+  );
+}
+
+async function testAtomicOrderRules() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const box = css({
+        color: "black",
+        padding: 0,
+        paddingTop: 4,
+        userSelect: "none",
+        "&:hover": { color: "blue" },
+        "&:focus-visible": { color: "teal" },
+        "&:active": { color: "navy" },
+        "&:disabled": { color: "gray" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+
+      export const guarded = css({
+        "&:hover:not(:disabled)": { color: "royalblue" },
+        "&:active:not(:disabled)": { color: "midnightblue" },
+      });
+
+      export const rtl = css({ $rtl: true, paddingLeft: 4 });
+    `,
+    "atomic-rules.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const box = readExportedClassName(result.code, "box");
+  const specificity = (declaration: string) => readSpecificityOf(cssText, box, declaration);
+
+  assert.ok(specificity("color:blue;") > specificity("color:black;"));
+  assert.ok(specificity("color:red;") > specificity("color:black;"));
+  assert.ok(specificity("padding-top:4px;") > specificity("padding:0;"));
+  assert.ok(specificity("color:blue;") < specificity("color:teal;"));
+  assert.ok(specificity("color:teal;") < specificity("color:navy;"));
+  assert.ok(specificity("color:navy;") < specificity("color:gray;"));
+  // A pseudo-class of the base wins over the base inside @media.
+  assert.ok(specificity("color:blue;") > specificity("color:red;"));
+
+  // r = 1 + L + 4·A + 8·P classes, L the level of the property among the
+  // shorthands it is nested in: background-color 1 (in background), padding-left
+  // 2 (in padding and padding-inline), border-top-color 3 (in border-inline-color).
+  const levels = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const levels = css({
+        backgroundColor: "red",
+        paddingLeft: 4,
+        borderTopColor: "blue",
+        "@media (width >= 40rem)": { borderTopLeftRadius: 4 },
+        "&:hover": { corner: "8px round" },
+      });
+    `,
+    "atomic-levels.ts",
+    { output: "atomic" },
+  );
+  const levelsCss = levels.cssText ?? "";
+  const levelsClass = readExportedClassName(levels.code, "levels");
+  const levelSpecificity = (declaration: string) =>
+    readSpecificityOf(levelsCss, levelsClass, declaration);
+  assert.equal(levelSpecificity("background-color:red;"), 2);
+  assert.equal(levelSpecificity("padding-left:4px;"), 3);
+  assert.equal(levelSpecificity("border-top-color:blue;"), 4);
+  // A longhand of level 3 inside @media: 1 + 3 + 4 = 8 classes; a shorthand of
+  // level 0 under :hover: 1 + 8 classes and the pseudo-class.
+  assert.equal(levelSpecificity("border-top-left-radius:4px;"), 8);
+  assert.equal(levelSpecificity("corner:8px round;"), 10);
+
+  // `:disabled` inside `:not()` adds its specificity, not the rank of :disabled.
+  const guarded = readExportedClassName(result.code, "guarded");
+  const guardedHover = readSpecificityOf(cssText, guarded, "color:royalblue;");
+  assert.equal(guardedHover, specificity("color:blue;") + 1);
+  assert.ok(guardedHover < specificity("color:teal;"));
+  assert.ok(readSpecificityOf(cssText, guarded, "color:midnightblue;") > guardedHover);
+
+  // Atoms pass through the WyW preprocessor: prefixes and :dir(rtl) stay.
+  assert.ok(
+    readRulesOf(cssText, readAtomFor(cssText, box, "-webkit-user-select:none;")).length > 0,
+    cssText,
+  );
+  const rtl = readExportedClassName(result.code, "rtl");
+  assert.ok(
+    readAtoms(rtl).some((atom) => /:dir\(rtl\) \./u.test(readSelectorOf(cssText, atom))),
+    cssText,
+  );
+}
+
+async function assertAtomicBuildFails(source: string, fixtureName: string, message: RegExp) {
+  await assert.rejects(
+    runWywTransform(`import { css, recipe, slotRecipe } from "dx-styles";\n${source}`, fixtureName, {
+      output: "atomic",
+    }),
+    message,
+  );
+}
+
+async function testAtomicOrderErrors() {
+  await assertAtomicBuildFails(
+    `export const link = css({ "&:active": { color: "navy" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/active-before-hover.ts",
+    /atomic-errors\/active-before-hover\.ts: css\(\) "link" sets "color: navy" under "&:active".*"color: blue" under "&:hover".*pseudo-class rank decides.*reorder/su,
+  );
+  await assertAtomicBuildFails(
+    `export const box = css({ paddingTop: 4, padding: 0 });`,
+    "atomic-errors/longhand-first.ts",
+    /"padding-top: 4px".*"padding: 0".*a longhand wins over its shorthand.*reorder/su,
+  );
+  await assertAtomicBuildFails(
+    `export const grid = css({
+      "@media (min-width: 40rem)": { gap: 8 },
+      "@media (min-width: 64rem)": { gap: 16 },
+    });`,
+    "atomic-errors/overlapping-media.ts",
+    /"gap: 8px" under "@media \(min-width: ?40rem\) &".*"gap: 16px".*overlapping @media.*do not overlap/su,
+  );
+  await assertAtomicBuildFails(
+    `export const button = recipe({
+      base: { paddingTop: 4 },
+      variants: { size: { lg: { padding: 8 } } },
+    });`,
+    "atomic-errors/recipe-longhand.ts",
+    /recipe\(\) "button" base sets "padding-top: 4px".*recipe\(\) "button" variant "size\.lg" sets "padding: 8px"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const button = recipe({
+      base: { "&:disabled": { color: "gray" } },
+      variants: { tone: { accent: { "&:hover": { color: "blue" } } } },
+    });`,
+    "atomic-errors/recipe-disabled.ts",
+    /base sets "color: gray" under "&:disabled".*variant "tone\.accent" sets "color: blue" under "&:hover".*move the "&:disabled" declaration of "color" from the recipe base into each variant that sets "&:hover" on this property, after its "&:hover"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const card = slotRecipe({
+      slots: ["root", "icon"],
+      base: { icon: { "&:disabled": { color: "gray" } } },
+      variants: { tone: { accent: { icon: { "&:hover": { color: "blue" } } } } },
+    });`,
+    "atomic-errors/slot-disabled.ts",
+    /slotRecipe\(\) "card" base slot "icon" sets "color: gray".*variant "tone\.accent" slot "icon" sets "color: blue".*move the "&:disabled" declaration/su,
+  );
+  await assertAtomicBuildFails(
+    `export const frame = css({ borderTop: "1px solid", borderColor: "red" });`,
+    "atomic-errors/border-families.ts",
+    /"border-top" and "border-color" have no order rule/su,
+  );
+  // In a vertical writing mode block-size is the width and inline-start a top or bottom side.
+  await assertAtomicBuildFails(
+    `export const vertical = css({ blockSize: 10, width: 20 });`,
+    "atomic-errors/vertical-size.ts",
+    /"block-size: 10px".*"width: 20px".*"width" is physical and "block-size" flow-relative/su,
+  );
+  await assertAtomicBuildFails(
+    `export const vertical = css({ paddingInlineStart: 4, paddingTop: 8 });`,
+    "atomic-errors/vertical-side.ts",
+    /"padding-top" is physical and "padding-inline-start" flow-relative/su,
+  );
+  // A shorthand also resets the properties it cannot set: border resets border-image.
+  await assertAtomicBuildFails(
+    `export const framed = css({ borderImage: "url(/a.png) 30", border: "1px solid red" });`,
+    "atomic-errors/border-resets-image.ts",
+    /"border-image: url\(\/a\.png\) 30".*"border: 1px solid red".*a longhand wins over/su,
+  );
+  await assertAtomicBuildFails(
+    `export const arrow = css({ markerStart: "url(#arrow)", marker: "none" });`,
+    "atomic-errors/marker.ts",
+    /"marker-start: url\(#arrow\)".*"marker: none".*a longhand wins over its shorthand/su,
+  );
+  await assertAtomicBuildFails(
+    `export const text = css({ fontKerning: "none", font: "16px serif" });`,
+    "atomic-errors/font-resets-kerning.ts",
+    /"font-kerning: none".*"font: 16px serif".*a longhand wins over its shorthand/su,
+  );
+  // Two spellings of one attribute value are one condition.
+  await assertAtomicBuildFails(
+    `export const escaped = css({
+      '&[data-state="open"]': { color: "red" },
+      '&[data-state="\\\\6f pen"]': { color: "blue" },
+    });`,
+    "atomic-errors/attribute-escape.ts",
+    /"color: red" under "&\[data-state="open"\]".*"color: blue".*no order rule/su,
+  );
+  await assertAtomicBuildFails(
+    `export const typed = css({
+      '&[type="text"]': { color: "red" },
+      '&[type="TEXT"]': { color: "blue" },
+    });`,
+    "atomic-errors/attribute-case.ts",
+    /"color: red" under "&\[type="text"\]".*"color: blue".*no order rule/su,
+  );
+  // Each value of a fallback array keeps its own !important: with :active and
+  // :hover at once the semantic model applies the later important 20px, the
+  // atomic model the important 10px of the higher pseudo-class rank.
+  await assertAtomicBuildFails(
+    `export const sized = css({
+      "&:active": { width: ["10px !important", "20px"] },
+      "&:hover": { width: ["10px", "20px !important"] },
+    });`,
+    "atomic-errors/fallback-important.ts",
+    /"width: 10px !important" under "&:active".*"width: 20px !important" under "&:hover".*The semantic model applies "&:hover".*pseudo-class rank decides.*it would apply "&:active"/su,
+  );
+  // :host() and :host-context() weigh a pseudo-class plus their argument (CSS
+  // Shadow, 3.2.3): under a host with the classes a and b the semantic model
+  // applies the context rule while hovered, the atomic model :hover.
+  await assertAtomicBuildFails(
+    `export const hosted = css({ ":host(.a.b) &": { color: "red" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/host-argument.ts",
+    /css\(\) "hosted" sets "color: red" under ":host\(\.a\.b\) &".*"color: blue" under "&:hover".*The semantic model applies ":host\(\.a\.b\) &".*it would apply "&:hover"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const themed = css({ ":host-context(.a.b) &": { color: "red" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/host-context-argument.ts",
+    /The semantic model applies ":host-context\(\.a\.b\) &".*it would apply "&:hover"/su,
+  );
+  // ::slotted() weighs a pseudo-element plus its argument (CSS Shadow, 3.2.4).
+  await assertAtomicBuildFails(
+    `export const slot = css({
+      "&::slotted(.a.b)": { color: "red" },
+      "&:hover::slotted(*)": { color: "blue" },
+    });`,
+    "atomic-errors/slotted-argument.ts",
+    /The semantic model applies "&::slotted\(\.a\.b\)".*it would apply "&:hover::slotted\(\*\)"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const layered = css({ "@layer base": { color: "red" } });`,
+    "atomic-errors/layer.ts",
+    /css\(\) "layered" uses "@layer base".*Move this rule to a regular stylesheet/su,
+  );
+  await assertAtomicBuildFails(
+    `export const scoped = css({ "@scope (.card)": { color: "red" } });`,
+    "atomic-errors/scope.ts",
+    /uses "@scope \(\.card\)"/su,
+  );
+
+  await assert.rejects(
+    runWywTransform(
+      `import { css } from "dx-styles";\nexport const plain = css({ color: "red" });`,
+      "atomic-errors/unknown-output.ts",
+      { output: "atoms" as "atomic" },
+    ),
+    /processors\.dxStyles\.output must be "semantic" or "atomic", got "atoms"/u,
+  );
+}
+
+async function testAtomicBuildsWithAnyPreprocessor() {
+  // WyW passes its preprocessor option to the extractor, not to processors, so
+  // the atomic model builds whatever it is; a preprocessor key in the plugin
+  // options, where a WyW config file puts it, is not that option.
+  const source = `
+    import { css } from "dx-styles";
+    export const plain = css({ color: "red", "&:hover": { color: "blue" } });
+  `;
+  const variants: Parameters<typeof runWywTransform>[2][] = [
+    { output: "atomic", preprocessor: "none" },
+    { output: "atomic", preprocessor: (selector, cssText) => `${selector}{${cssText}}` },
+    { output: "atomic", pluginOptions: { preprocessor: "none" } },
+  ];
+
+  for (const options of variants) {
+    const result = await runWywTransform(source, "atomic-preprocessor.ts", options);
+    const atoms = readAtoms(readExportedClassName(result.code, "plain"));
+    assert.equal(atoms.length, 2);
+    for (const atom of atoms) {
+      assert.ok((result.cssText ?? "").includes(`.${atom}`), `${atom} has no rule`);
+    }
+  }
+}
+
+async function testAtomicPhysicalAndFlowRelativeHint() {
+  const reason =
+    "the writing mode is not known at build time, so they can set the same physical property";
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ marginTop: 8, marginInlineStart: 4 });`,
+    "atomic-errors/physical-margin.ts",
+    new RegExp(
+      `"margin-top" is physical and "margin-inline-start" flow-relative, and ${reason}: write both in one system, "margin-block-start" instead of "margin-top", or "margin-left" instead of "margin-inline-start" if the style does not need to follow the writing direction`,
+      "su",
+    ),
+  );
+  await assertAtomicBuildFails(
+    `export const toast = css({ position: "fixed", top: 0, insetInlineEnd: 0 });`,
+    "atomic-errors/physical-inset.ts",
+    new RegExp(
+      `"top" is physical and "inset-inline-end" flow-relative, and ${reason}: write both in one system, "inset-block-start" instead of "top", or "right" instead of "inset-inline-end"`,
+      "su",
+    ),
+  );
+  await assertAtomicBuildFails(
+    `export const panel = css({ height: 40, inlineSize: 200 });`,
+    "atomic-errors/physical-size.ts",
+    new RegExp(
+      `"height" is physical and "inline-size" flow-relative, and ${reason}: write both in one system, "block-size" instead of "height", or "width" instead of "inline-size"`,
+      "su",
+    ),
+  );
+
+  // A physical longhand is nested in a flow-relative shorthand that sets it in
+  // some writing mode, so the later longhand wins in both models wherever they
+  // set one side, and the earlier one is a build error.
+  const longhandLater = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginInline: 4, marginTop: 8 });
+      export const padded = css({ paddingInline: 4, paddingTop: 8 });
+      export const frame = css({ borderInline: "1px solid red", borderTopColor: "blue" });
+    `,
+    "atomic-physical-longhand-later.ts",
+    { output: "atomic" },
+  );
+  const longhandLaterCss = longhandLater.cssText ?? "";
+  const toolbar = readExportedClassName(longhandLater.code, "toolbar");
+  assert.ok(
+    readSpecificityOf(longhandLaterCss, toolbar, "margin-top:8px;") >
+      readSpecificityOf(longhandLaterCss, toolbar, "margin-inline:4px;"),
+    longhandLaterCss,
+  );
+  ["padding-inline:4px;", "padding-top:8px;", "border-top-color:blue;"].forEach(
+    (declaration) =>
+      assert.ok(longhandLaterCss.includes(declaration), longhandLaterCss),
+  );
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ marginTop: 8, marginInline: 4 });`,
+    "atomic-errors/physical-margin-inline.ts",
+    /"margin-top: 8px".*"margin-inline: 4px".*a longhand wins over its shorthand.*reorder the declarations/su,
+  );
+  // The semantic model applies the more specific .dark &, the atomic model the
+  // longhand, whose atom repeats its class more often.
+  await assertAtomicBuildFails(
+    `export const frame = css({ borderTopColor: "blue", ".dark &": { borderInline: "1px solid red" } });`,
+    "atomic-errors/physical-border-inline-dark.ts",
+    /"border-top-color: blue".*"border-inline: 1px solid red" under "\.dark &".*The semantic model applies "\.dark &".*a longhand wins over its shorthand/su,
+  );
+
+  // A physical shorthand that sets every side or corner contains the
+  // flow-relative property in every writing mode, so the longhand wins there
+  // in both models; a pseudo-class rank or an at-rule orders a pair the same
+  // way in every writing mode.
+  const ordered = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const box = css({ padding: 0, paddingInlineStart: 8 });
+      export const anchored = css({ inset: 0, insetInline: 4 });
+      export const rounded = css({ borderRadius: 16, borderStartStartRadius: 4 });
+      export const hovered = css({ marginInline: 4, "&:hover": { marginTop: 8 } });
+      export const wide = css({ marginInline: 4, "@media (width >= 40rem)": { marginTop: 8 } });
+    `,
+    "atomic-physical-ordered.ts",
+    { output: "atomic" },
+  );
+  const orderedCss = ordered.cssText ?? "";
+  [
+    "padding-inline-start:8px;",
+    "inset-inline:4px;",
+    "border-start-start-radius:4px;",
+    "margin-inline:4px;",
+    "margin-top:8px;",
+  ].forEach((declaration) => assert.ok(orderedCss.includes(declaration), orderedCss));
+
+  // Under :where(&) both atoms have no specificity, so nothing orders the pair;
+  // a plain & next to :where(&) is more specific in both models.
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ ":where(&)": { marginTop: 8, marginInline: 4 } });`,
+    "atomic-errors/physical-margin-inline-where.ts",
+    /the atomic model has no rule that orders these two declarations.*"margin-top" is physical and "margin-inline" flow-relative/su,
+  );
+  const outsideWhere = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginTop: 8, ":where(&)": { marginInline: 4 } });
+    `,
+    "atomic-physical-where.ts",
+    { output: "atomic" },
+  );
+  const outsideWhereCss = outsideWhere.cssText ?? "";
+  ["margin-top:8px;", "margin-inline:4px;"].forEach((declaration) =>
+    assert.ok(outsideWhereCss.includes(declaration), outsideWhereCss),
+  );
+
+  // The rewrites the hints name build.
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginBlockStart: 8, marginInlineStart: 4 });
+      export const toolbarPhysical = css({ marginTop: 8, marginLeft: 4 });
+      export const toast = css({ position: "fixed", insetBlockStart: 0, insetInlineEnd: 0 });
+      export const toastPhysical = css({ position: "fixed", top: 0, right: 0 });
+      export const panel = css({ blockSize: 40, inlineSize: 200 });
+      export const panelPhysical = css({ height: 40, width: 200 });
+    `,
+    "atomic-physical-rewrites.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  [
+    "margin-block-start:8px;",
+    "margin-inline-start:4px;",
+    "inset-block-start:0;",
+    "inset-inline-end:0;",
+    "block-size:40px;",
+    "inline-size:200px;",
+    "margin-top:8px;",
+    "right:0;",
+    "height:40px;",
+  ].forEach((declaration) => assert.ok(cssText.includes(declaration), cssText));
+}
+
+// CSS Borders 4: the first start/end of a flow-relative corner is on the block
+// axis and the second on the inline axis (§3.5, §3.7), so corner-start-start-shape
+// is the top-left corner in horizontal-tb ltr and another one elsewhere.
+async function testAtomicFlowRelativeCornersMeetPhysicalOnes() {
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: 16, cornerStartStartShape: "bevel", cornerShape: "round" });`,
+    "atomic-errors/logical-corner-shape.ts",
+    /"corner-start-start-shape: bevel".*"corner-shape: round".*a longhand wins over its shorthand/su,
+  );
+  await assertAtomicBuildFails(
+    `export const card = css({ cornerTopLeftShape: "round", cornerStartStartShape: "bevel" });`,
+    "atomic-errors/physical-corner-shape.ts",
+    /"corner-top-left-shape" is physical and "corner-start-start-shape" flow-relative.*"corner-start-start-shape" instead of "corner-top-left-shape", or "corner-top-left-shape" instead of "corner-start-start-shape"/su,
+  );
+  // The side radius shorthands (§3.6.1) set two corners each, and a physical
+  // corner is nested in a flow-relative side that sets it in some writing mode.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopLeftRadius: "4px", borderBlockStartRadius: "8px" });`,
+    "atomic-errors/logical-side-radius.ts",
+    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*a longhand wins over its shorthand/su,
+  );
+  // The corner shorthands (§3.9) set the shape and the radius of their corners.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderStartStartRadius: "8px", cornerBlockStart: "4px bevel" });`,
+    "atomic-errors/logical-corner.ts",
+    /"border-start-start-radius: 8px".*"corner-block-start: 4px bevel".*a longhand wins over its shorthand/su,
+  );
+  // The border clip of a flow-relative side (§5.2).
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopClip: "none", borderBlockClip: "none" });`,
+    "atomic-errors/logical-border-clip.ts",
+    /"border-top-clip: none".*"border-block-clip: none"/su,
+  );
+
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const logical = css({ cornerShape: "round", cornerStartStartShape: "bevel" });
+      export const physical = css({ cornerShape: "round", cornerTopLeftShape: "bevel" });
+      export const sides = css({ borderRadius: "16px", borderBlockStartRadius: "4px" });
+    `,
+    "atomic-logical-corners.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  ["corner-start-start-shape:bevel;", "corner-top-left-shape:bevel;", "border-block-start-radius:4px;"].forEach(
+    (declaration) => assert.ok(cssText.includes(declaration), cssText),
+  );
+}
+
+// CSS Borders 4: corner sets every corner-*-shape and border-*-radius longhand
+// (§3.9.3), as border-radius (§3.6.2) and corner-shape (§3.8.2) together do;
+// corner-top sets the two of its side (§3.9.2), as border-top-radius (§3.6.1)
+// and corner-top-shape (§3.8.1) do.
+async function testAtomicCornerShorthandsNest() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const radius = css({ corner: "16px round", borderRadius: "8px" });
+      export const shape = css({ corner: "16px round", cornerShape: "bevel" });
+      export const side = css({ cornerTop: "8px bevel", borderTopRadius: "4px" });
+      export const sideRadius = css({ borderRadius: 8, borderTopRadius: 4 });
+      export const corner = css({ borderTopLeftRadius: 2 });
+      export const clip = css({ borderBlockClip: "none", borderTopClip: "10px" });
+    `,
+    "atomic-corner-nesting.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const specificity = (name: string, declaration: string) =>
+    readSpecificityOf(
+      cssText,
+      readExportedClassName(result.code, name),
+      declaration,
+    );
+
+  assert.equal(specificity("radius", "corner:16px round;"), 1);
+  assert.equal(specificity("radius", "border-radius:8px;"), 2);
+  assert.equal(specificity("shape", "corner-shape:bevel;"), 2);
+  assert.equal(specificity("side", "corner-top:8px bevel;"), 2);
+  assert.equal(specificity("side", "border-top-radius:4px;"), 3);
+  assert.equal(specificity("sideRadius", "border-top-radius:4px;"), 3);
+  assert.equal(specificity("corner", "border-top-left-radius:2px;"), 4);
+  assert.ok(
+    specificity("clip", "border-top-clip:10px;") >
+      specificity("clip", "border-block-clip:none;"),
+  );
+
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: "8px", corner: "16px round" });`,
+    "atomic-errors/corner-after-radius.ts",
+    /"border-radius: 8px".*"corner: 16px round".*a longhand wins over its shorthand.*reorder the declarations/su,
+  );
+  // Neither sets all the other sets: border-radius sets no shape, corner-top
+  // only two corners.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: 8, cornerTop: "4px bevel" });`,
+    "atomic-errors/radius-and-corner-side.ts",
+    /the atomic model has no rule that orders these two declarations.*"border-radius" and "corner-top" have no order rule/su,
+  );
+  // A physical side is nested in a flow-relative shorthand that sets it in some
+  // writing mode.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopClip: "10px", borderBlockClip: "none" });`,
+    "atomic-errors/clip-side-first.ts",
+    /"border-top-clip: 10px".*"border-block-clip: none".*a longhand wins over its shorthand.*reorder the declarations/su,
+  );
+}
+
+async function testAtomicAllowedOrders() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      const a = css({ color: "red", margin: 0 });
+      const b = css({ color: "blue" });
+      export const composed = css(a, b);
+      export const shorthandFirst = css({ padding: 0, paddingTop: 4 });
+      export const states = css({
+        "&:hover": { color: "blue" },
+        "&:focus": { color: "teal" },
+        "&:active": { color: "navy" },
+        "&:disabled": { color: "gray" },
+      });
+      export const guarded = css({
+        "&:hover:not(:disabled)": { color: "blue" },
+        "&:active:not(:disabled)": { color: "navy" },
+        "&:disabled": { color: "gray" },
+      });
+      export const attributes = css({
+        '&[data-state="open"]': { color: "green" },
+        '&[data-state="closed"]': { color: "red" },
+      });
+      export const negation = css({
+        "&:checked": { color: "green" },
+        "&:not(:checked)": { color: "red" },
+      });
+      export const tags = css({
+        "button&": { color: "green" },
+        "a&": { color: "red" },
+      });
+      export const ranges = css({
+        "@media (width < 40rem)": { color: "green" },
+        "@media (width >= 40rem)": { color: "red" },
+      });
+      export const sameValue = css({
+        "&:focus": { color: "red" },
+        "&:focus-visible": { color: "red" },
+      });
+      export const steps = css({
+        "@media (40rem <= width < 64rem)": { gap: 8 },
+        "@media (width >= 64rem)": { gap: 16 },
+      });
+      export const resets = css({
+        border: "1px solid red",
+        borderImage: "url(/a.png) 30",
+        font: "16px serif",
+        fontKerning: "none",
+      });
+      export const logicalAxes = css({ paddingInline: 8, paddingBlock: 4 });
+      export const logicalSides = css({ marginInlineStart: 8, marginInlineEnd: 4 });
+      export const logicalSizes = css({ inlineSize: 8, blockSize: 4 });
+      export const logicalCorners = css({ borderStartStartRadius: 2, borderEndEndRadius: 4 });
+      export const allKeepsVariables = css({
+        "--accent": "red",
+        all: "initial",
+        direction: "rtl",
+        unicodeBidi: "isolate",
+      });
+      export const attributeCase = css({
+        '&[data-state="open"]': { color: "green" },
+        '&[data-state="OPEN"]': { color: "red" },
+      });
+      export const gapThenGrid = css({ rowGap: 8, grid: "auto / 1fr" });
+      export const gridThenGap = css({ grid: "auto / 1fr", rowGap: 8 });
+      export const markers = css({ marker: "none", markerStart: "url(#arrow)" });
+      export const hostWins = css({
+        ":host(.a.b.c.d.e.f.g.h.i) &": { color: "red" },
+        "&:hover": { color: "blue" },
+      });
+      export const hostLoses = css({ ":host &": { color: "red" }, "&:hover": { color: "blue" } });
+      export const slottedLoses = css({
+        "&::slotted(.a)": { color: "red" },
+        "&:hover::slotted(*)": { color: "blue" },
+      });
+    `,
+    "atomic-allowed.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const composed = readAtoms(readExportedClassName(result.code, "composed"));
+
+  assert.equal(composed.length, 2);
+  assert.ok(composed.some((atom) => readRulesOf(cssText, atom).some((rule) => rule.includes("color:blue;"))));
+  assert.equal(readAtoms(readExportedClassName(result.code, "shorthandFirst")).length, 2);
+  // A reset-only sub-property after its shorthand wins by the longhand rule.
+  const resets = readExportedClassName(result.code, "resets");
+  const resetSpecificity = (declaration: string) =>
+    readSpecificityOf(cssText, resets, declaration);
+  assert.ok(
+    resetSpecificity("border-image:url(/a.png) 30;") > resetSpecificity("border:1px solid red;"),
+  );
+  assert.ok(resetSpecificity("font-kerning:none;") > resetSpecificity("font:16px serif;"));
+  assert.equal(readAtoms(readExportedClassName(result.code, "allKeepsVariables")).length, 4);
+  const markers = readExportedClassName(result.code, "markers");
+  assert.ok(
+    readSpecificityOf(cssText, markers, "marker-start:url(#arrow);") >
+      readSpecificityOf(cssText, markers, "marker:none;"),
+  );
+
+  await assertAtomicBuildFails(
+    `export const touching = css({
+      "@media (max-width: 40rem)": { color: "green" },
+      "@media (min-width: 40rem)": { color: "red" },
+    });`,
+    "atomic-errors/touching-ranges.ts",
+    /overlapping @media/u,
+  );
+}
+
+async function testAtomicSelectorsReadClassesAsTokens() {
+  // The class of the style is "fixed": the same text inside a string or an
+  // escaped identifier is not that class.
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const labelled = css({
+        '&[data-label=".fixed"]': { color: "red" },
+        '&:not([title=".fixed"])': { backgroundColor: "blue" },
+        ".fixed\\\\:x &": { borderColor: "green" },
+        '&:is([data-x="a,b"]):not([title=")"])': { outlineColor: "red" },
+      });
+    `,
+    "atomic-class-tokens.ts",
+    { classNameSlug: "fixed", minifyClassNames: true, output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const labelled = readExportedClassName(result.code, "labelled");
+  const selectorOf = (declaration: string) =>
+    readSelectorOf(cssText, readAtomFor(cssText, labelled, declaration));
+
+  assert.deepEqual(labelled.split(" "), readAtoms(labelled));
+  assert.match(selectorOf("color:red;"), /^(?:\.dx-[\w-]+)+\[data-label="\.fixed"\]$/u);
+  assert.match(selectorOf("background-color:blue;"), /^(?:\.dx-[\w-]+)+:not\(\[title="\.fixed"\]\)$/u);
+  assert.match(selectorOf("border-color:green;"), /^\.fixed\\:x (?:\.dx-[\w-]+)+$/u);
+  assert.match(
+    selectorOf("outline-color:red;"),
+    /^(?:\.dx-[\w-]+)+:is\(\[data-x="a,b"\]\):not\(\[title="\)"\]\)$/u,
+  );
+}
+
+async function testAtomicFallbackArrayIsOneAtom() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const sized = css({ width: ["100px", "50vw"] });
+    `,
+    "atomic-fallbacks.ts",
+    { output: "atomic" },
+  );
+  const sized = readExportedClassName(result.code, "sized");
+
+  assert.equal(readAtoms(sized).length, 1, sized);
+  assert.deepEqual(readRulesOf(result.cssText ?? "", readAtoms(sized)[0]), [
+    `.${readAtoms(sized)[0]}{width:100px;width:50vw;}`,
+  ]);
+
+  // In this order both models apply the important value of :active, or of
+  // :hover when only one of them matches: the build goes through.
+  const ordered = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const sized = css({
+        "&:hover": { width: ["10px", "20px !important"] },
+        "&:active": { width: ["10px !important", "20px"] },
+      });
+    `,
+    "atomic-fallbacks-important.ts",
+    { output: "atomic" },
+  );
+  assert.equal(readAtoms(readExportedClassName(ordered.code, "sized")).length, 2);
+}
+
+async function testAtomicRelativeUrlsDependOnTheBuildRoot() {
+  const source = `
+    import { css } from "dx-styles";
+    export const image = css({ backgroundImage: "url(./a.png)" });
+  `;
+  const atomFor = async (root: string) => {
+    const result = await runWywTransform(source, `${root}/src/styles.ts`, {
+      output: "atomic",
+      root,
+    });
+    return readAtoms(readExportedClassName(result.code, "image"))[0];
+  };
+  const fixtures = join(process.cwd(), "src/__tests__/fixtures/atomic-roots");
+
+  assert.notEqual(await atomFor(join(fixtures, "a")), await atomFor(join(fixtures, "b")));
+}
+
+async function testAtomicVendorPrefixesMatchTheSemanticModel() {
+  const source = `
+    import { css } from "dx-styles";
+    export const cell = css({ gridRow: "2 / 4", gridColumnStart: 1 });
+  `;
+  const semantic = await runWywTransform(source, "atomic-prefixes.ts");
+  const atomic = await runWywTransform(source, "atomic-prefixes.ts", { output: "atomic" });
+  const declarations = (cssText: string) =>
+    Array.from(cssText.matchAll(/[\w-]+:[^;{}]+;/gu), ([declaration]) => declaration).sort();
+  assert.deepEqual(declarations(atomic.cssText ?? ""), declarations(semantic.cssText ?? ""));
+
+  // Stylis prefixes grid-row-start and grid-row-end by each other when they
+  // share a rule (stylis@4.4.0:src/Prefixer.js), which an atom alone does not
+  // do; the pair builds, and only the -ms-grid-row-span that IE reads differs.
+  const pair = `
+    import { css } from "dx-styles";
+    export const cell = css({ gridRowStart: 2, gridRowEnd: 4 });
+  `;
+  const semanticPair = await runWywTransform(pair, "atomic-grid-pair.ts");
+  const atomicPair = await runWywTransform(pair, "atomic-grid-pair.ts", { output: "atomic" });
+  assert.deepEqual(declarations(semanticPair.cssText ?? ""), [
+    "-ms-grid-row-span:2;",
+    "-ms-grid-row:2;",
+    "grid-row-end:4;",
+    "grid-row-start:2;",
+  ]);
+  assert.deepEqual(declarations(atomicPair.cssText ?? ""), [
+    "-ms-grid-row-span:4;",
+    "-ms-grid-row:2;",
+    "grid-row-end:4;",
+    "grid-row-start:2;",
+  ]);
+  const unprefixed = await runWywTransform(pair, "atomic-grid-pair.ts", {
+    output: "atomic",
+    prefixer: false,
+  });
+  assert.deepEqual(declarations(unprefixed.cssText ?? ""), ["grid-row-end:4;", "grid-row-start:2;"]);
+
+  // The prefixer turns user-select into -webkit-user-select too.
+  for (const style of [
+    `{ WebkitUserSelect: "text", userSelect: "none" }`,
+    `{ userSelect: "none", WebkitUserSelect: "text" }`,
+  ]) {
+    await assertAtomicBuildFails(
+      `export const text = css(${style});`,
+      "atomic-errors/prefixed-overlap.ts",
+      /"-webkit-user-select" and "user-select" have no order rule|"user-select" and "-webkit-user-select" have no order rule/su,
+    );
+  }
+}
+
+// Each shorthand and the properties it sets or resets, by its specification;
+// the flow-relative ones meet the physical ones in some writing mode.
+const SHORTHAND_FAMILIES = [
+  "animation: animation-name animation-duration animation-timing-function animation-delay animation-iteration-count animation-direction animation-fill-mode animation-play-state animation-timeline animation-composition animation-range",
+  "animation-range: animation-range-start animation-range-end",
+  "background: background-image background-position background-size background-repeat background-origin background-clip background-attachment background-color",
+  "background-position: background-position-x background-position-y",
+  "border: border-width border-style border-color border-image",
+  "border-image: border-image-source border-image-slice border-image-width border-image-outset border-image-repeat",
+  "border-radius: border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius border-start-start-radius border-start-end-radius border-end-start-radius border-end-end-radius",
+  "caret: caret-color caret-animation caret-shape",
+  "column-rule: column-rule-width column-rule-style column-rule-color",
+  "columns: column-width column-count column-height",
+  "contain-intrinsic-size: contain-intrinsic-width contain-intrinsic-height contain-intrinsic-block-size contain-intrinsic-inline-size",
+  "container: container-name container-type",
+  "corner-shape: corner-top-shape corner-bottom-shape corner-start-start-shape corner-start-end-shape corner-end-start-shape corner-end-end-shape",
+  // CSS Borders 4: the side shorthands of the radius and the shape (§3.6.1,
+  // §3.8.1), the corner shorthands (§3.9), the border clip (§5.2) and the
+  // box-shadow longhands (§6).
+  ...Object.entries({
+    top: "top-left top-right",
+    right: "top-right bottom-right",
+    bottom: "bottom-left bottom-right",
+    left: "top-left bottom-left",
+    "block-start": "start-start start-end",
+    "block-end": "end-start end-end",
+    "inline-start": "start-start end-start",
+    "inline-end": "start-end end-end",
+  }).flatMap(([side, corners]) => [
+    `border-${side}-radius: ${corners.replace(/\S+/gu, "border-$&-radius")}`,
+    `corner-${side}-shape: ${corners.replace(/\S+/gu, "corner-$&-shape")}`,
+    `corner-${side}: corner-${side}-shape border-${side}-radius`,
+  ]),
+  ..."top-left top-right bottom-right bottom-left start-start start-end end-start end-end"
+    .split(" ")
+    .map((corner) => `corner-${corner}: corner-${corner}-shape border-${corner}-radius`),
+  "corner: corner-shape border-radius",
+  "border-clip: border-top-clip border-right-clip border-bottom-clip border-left-clip border-block-clip border-inline-clip",
+  "border-block-clip: border-block-start-clip border-block-end-clip",
+  "border-inline-clip: border-inline-start-clip border-inline-end-clip",
+  "box-shadow: box-shadow-offset box-shadow-blur box-shadow-spread box-shadow-color box-shadow-position",
+  "flex: flex-grow flex-shrink flex-basis",
+  "flex-flow: flex-direction flex-wrap",
+  "font: font-style font-variant font-weight font-width font-size line-height font-family font-feature-settings font-kerning font-language-override font-optical-sizing font-size-adjust font-variation-settings",
+  "font-synthesis: font-synthesis-weight font-synthesis-style font-synthesis-small-caps font-synthesis-position",
+  "font-variant: font-variant-alternates font-variant-caps font-variant-east-asian font-variant-emoji font-variant-ligatures font-variant-numeric font-variant-position",
+  "gap: row-gap column-gap",
+  "grid: grid-template-rows grid-template-columns grid-template-areas grid-auto-rows grid-auto-columns grid-auto-flow",
+  "grid-area: grid-row grid-column",
+  "grid-column: grid-column-start grid-column-end",
+  "grid-row: grid-row-start grid-row-end",
+  "grid-template: grid-template-rows grid-template-columns grid-template-areas",
+  "line-clamp: max-lines block-ellipsis continue",
+  "list-style: list-style-image list-style-position list-style-type",
+  "marker: marker-start marker-mid marker-end",
+  "mask: mask-image mask-mode mask-repeat mask-position mask-clip mask-origin mask-size mask-composite mask-border",
+  "mask-border: mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode",
+  "offset: offset-position offset-path offset-distance offset-anchor offset-rotate",
+  "outline: outline-width outline-style outline-color",
+  "overflow: overflow-x overflow-y overflow-block overflow-inline",
+  "overscroll-behavior: overscroll-behavior-x overscroll-behavior-y overscroll-behavior-block overscroll-behavior-inline",
+  "place-content: align-content justify-content",
+  "place-items: align-items justify-items",
+  "place-self: align-self justify-self",
+  "position-try: position-try-order position-try-fallbacks",
+  "scroll-timeline: scroll-timeline-name scroll-timeline-axis",
+  "text-align: text-align-all text-align-last",
+  "text-box: text-box-trim text-box-edge",
+  "text-decoration: text-decoration-line text-decoration-style text-decoration-color text-decoration-thickness",
+  "text-emphasis: text-emphasis-style text-emphasis-color",
+  "text-wrap: text-wrap-mode text-wrap-style",
+  "transition: transition-property transition-duration transition-timing-function transition-delay transition-behavior",
+  "vertical-align: alignment-baseline baseline-source baseline-shift",
+  "view-timeline: view-timeline-name view-timeline-axis view-timeline-inset",
+  "white-space: white-space-collapse text-wrap-mode white-space-trim",
+  ...["margin", "padding", "scroll-margin", "scroll-padding", "inset"].flatMap((box) => {
+    const side = box === "inset" ? "" : `${box}-`;
+    return [
+      `${box}: ${side}top ${side}right ${side}bottom ${side}left ${box}-block ${box}-inline`,
+      `${box}-block: ${box}-block-start ${box}-block-end`,
+      `${box}-inline: ${box}-inline-start ${box}-inline-end`,
+    ];
+  }),
+  ...["width", "style", "color"].flatMap((part) => [
+    `border-${part}: border-top-${part} border-right-${part} border-bottom-${part} border-left-${part} border-block-${part} border-inline-${part}`,
+    `border-block-${part}: border-block-start-${part} border-block-end-${part}`,
+    `border-inline-${part}: border-inline-start-${part} border-inline-end-${part}`,
+  ]),
+  ...["top", "right", "bottom", "left", "block", "inline", "block-start", "block-end", "inline-start", "inline-end"].map(
+    (side) => `border-${side}: border-${side}-width border-${side}-style border-${side}-color`,
+  ),
+].map((line) => line.split(/:? /u));
+
+async function testAtomicShorthandFamilies() {
+  const members = new Map(SHORTHAND_FAMILIES.map(([shorthand, ...rest]) => [shorthand, rest]));
+  const longhandsOf = (property: string): string[] =>
+    members.get(property)?.flatMap(longhandsOf) ?? [property];
+  const build = (name: string, declarations: readonly (readonly [string, string])[]) =>
+    runWywTransform(
+      `import { css } from "dx-styles";\nexport const s = css(${JSON.stringify(Object.fromEntries(declarations))});`,
+      `atomic-families/${name}.ts`,
+      { output: "atomic" },
+    );
+  const isFlowRelative = (property: string) =>
+    /\b(?:block|inline)\b|-(?:start|end)-(?:start|end)-/u.test(property);
+  // A flow-relative property meets the physical ones of its box in some writing mode.
+  const boxOf = (property: string) =>
+    property.replace(/\b(?:top|right|bottom|left|block|inline|start|end|x|y|width|height)\b|-/gu, "") ||
+    "inset";
+  // Physical longhands that never meet one another (and no -end next to its -start).
+  const independent = [...new Set([...members.keys()].flatMap(longhandsOf))].filter(
+    (longhand) => !isFlowRelative(longhand) && !/^grid-(?:row|column)-end$/u.test(longhand),
+  );
+
+  for (const [shorthand] of members) {
+    const family = new Set(longhandsOf(shorthand));
+    // A longhand before its shorthand: the semantic model applies the shorthand.
+    for (const longhand of family) {
+      await assert.rejects(
+        build(shorthand, [[longhand, "a"], [shorthand, "b"]]),
+        /a longhand wins over its shorthand|have no order rule/u,
+        `${longhand} before ${shorthand}`,
+      );
+    }
+    // Properties outside the family never meet the shorthand.
+    const boxes = new Set([...family].filter(isFlowRelative).map(boxOf));
+    const outside = independent.filter(
+      (property) => !family.has(property) && !boxes.has(boxOf(property)),
+    );
+    await build(shorthand, [...outside.map((property) => [property, "a"] as const), [shorthand, "b"]]);
+  }
+}
+
+/** Imports a transformed module, resolving `dx-styles` to this package as a consumer does. */
+async function importTransformedModule(code: string, name: string): Promise<unknown> {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const moduleRoot = await mkdtemp(join(tempRootBase, `${name}-`));
+
+  try {
+    const modulePath = join(moduleRoot, `${name}.js`);
+    await writeFile(modulePath, code);
+    return await import(pathToFileURL(modulePath).href);
+  } finally {
+    await rm(moduleRoot, { force: true, recursive: true });
+  }
+}
+
+interface AtomicRecipesModule {
+  readonly button: (selection?: Record<string, string>) => string;
+  readonly card: (selection?: Record<string, string>) => Record<"root" | "title", string>;
+}
+
+function isAtomicRecipesModule(value: unknown): value is AtomicRecipesModule {
+  return isRecord(value) && typeof value.button === "function" && typeof value.card === "function";
+}
+
+function readAtomDeclarations(cssText: string, className: string): string[] {
+  return readAtoms(className)
+    .map((atom) => {
+      const [rule] = readRulesOf(cssText, atom);
+      assert.ok(rule, `no rule for ${atom}`);
+      return rule.slice(rule.indexOf("{") + 1, -1).replace(/-webkit-[^;]+;/gu, "");
+    })
+    .sort();
+}
+
+async function testAtomicRecipesKeepTheLastAtomPerKey() {
+  const result = await runWywTransform(
+    `
+      import { recipe, slotRecipe } from "dx-styles";
+
+      export const button = recipe({
+        base: { color: "black", padding: 4 },
+        variants: {
+          tone: { accent: { color: "blue" }, muted: {} },
+          size: { lg: { padding: 8 } },
+        },
+        compoundVariants: [{ tone: "accent", size: "lg", css: { color: "navy" } }],
+        defaultVariants: { tone: "muted" },
+      });
+
+      export const card = slotRecipe({
+        slots: ["root", "title"],
+        base: { root: { margin: 0 }, title: { color: "black" } },
+        variants: {
+          tone: { accent: { title: { color: "blue" } } },
+          size: { lg: { root: { padding: 8 } } },
+        },
+        compoundVariants: [{ tone: "accent", size: "lg", css: { title: { color: "navy" } } }],
+      });
+    `,
+    "atomic-recipes.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const moduleNamespace = await importTransformedModule(result.code, "atomic-recipes");
+  assert.ok(isAtomicRecipesModule(moduleNamespace));
+  const { button, card } = moduleNamespace;
+
+  assert.deepEqual(readAtomDeclarations(cssText, button()), ["color:black;", "padding:4px;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, button({ tone: "accent" })), [
+    "color:blue;",
+    "padding:4px;",
+  ]);
+  assert.deepEqual(readAtomDeclarations(cssText, button({ tone: "accent", size: "lg" })), [
+    "color:navy;",
+    "padding:8px;",
+  ]);
+
+  assert.deepEqual(readAtomDeclarations(cssText, card().title), ["color:black;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).title), ["color:blue;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, card({ tone: "accent" }).root), ["margin:0;"]);
+  const compound = card({ tone: "accent", size: "lg" });
+  assert.deepEqual(readAtomDeclarations(cssText, compound.title), ["color:navy;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, compound.root), ["margin:0;", "padding:8px;"]);
+}
+
+async function testAtomicStyleHandlesComposeByKey() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "handles-"));
+
+  try {
+    // A recipe built in the atomic model, as a library ships it.
+    const library = await runWywTransform(
+      `
+        import { recipe } from "dx-styles";
+
+        export const button = recipe({
+          base: { color: "black", padding: 4 },
+          variants: { tone: { accent: { color: "blue" } } },
+        });
+
+        export const inset = recipe({ base: { paddingTop: 4 } });
+        export const flat = recipe({ base: { padding: 0 } });
+      `,
+      join(fixtureRoot, "button.ts"),
+      { output: "atomic" },
+    );
+    await writeFile(join(fixtureRoot, "button.js"), library.code);
+
+    const result = await runWywTransform(
+      `
+        import { createRecipeStyleHandles, css } from "dx-styles";
+        import { button } from "./button.js";
+
+        const handles = createRecipeStyleHandles(button);
+
+        export const wrapper = css(handles.root, { color: "red", margin: 0 });
+      `,
+      join(fixtureRoot, "wrapper.ts"),
+      { output: "atomic" },
+    );
+    const cssText = `${library.cssText ?? ""}${result.cssText ?? ""}`;
+    const wrapper = readExportedClassName(result.code, "wrapper");
+
+    assert.deepEqual(readAtomDeclarations(cssText, wrapper), [
+      "color:red;",
+      "margin:0;",
+      "padding:4px;",
+    ]);
+
+    // A handle given again after another one of the same key wins, as in cx.
+    const tones = await runWywTransform(
+      `
+        import { css } from "dx-styles";
+
+        export const red = css({ color: "red" });
+        export const blue = css({ color: "blue" });
+      `,
+      join(fixtureRoot, "tones.ts"),
+      { output: "atomic" },
+    );
+    await writeFile(join(fixtureRoot, "tones.js"), tones.code);
+    const repeated = await runWywTransform(
+      `
+        import { createStyleHandle, css } from "dx-styles";
+        import { blue, red } from "./tones.js";
+
+        const redHandle = createStyleHandle(red);
+        const blueHandle = createStyleHandle(blue);
+
+        export const lastRed = css(redHandle, blueHandle, redHandle);
+        export const lastBlue = css(blueHandle, redHandle, blueHandle);
+      `,
+      join(fixtureRoot, "repeated.ts"),
+      { output: "atomic" },
+    );
+    const tonesCss = `${tones.cssText ?? ""}${repeated.cssText ?? ""}`;
+    assert.deepEqual(
+      readAtomDeclarations(tonesCss, readExportedClassName(repeated.code, "lastRed")),
+      ["color:red;"],
+    );
+    assert.deepEqual(
+      readAtomDeclarations(tonesCss, readExportedClassName(repeated.code, "lastBlue")),
+      ["color:blue;"],
+    );
+
+    // Two known handles are checked against each other.
+    await assert.rejects(
+      runWywTransform(
+        `
+          import { createRecipeStyleHandles, css } from "dx-styles";
+          import { flat, inset } from "./button.js";
+
+          export const both = css(
+            createRecipeStyleHandles(inset).root,
+            createRecipeStyleHandles(flat).root,
+          );
+        `,
+        join(fixtureRoot, "both.ts"),
+        { output: "atomic" },
+      ),
+      /style handle #1 of css\(\) "both" sets "padding-top: 4px".*style handle #2 of css\(\) "both" sets "padding: 0".*a longhand wins over its shorthand/su,
+    );
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+async function testAtomicOrderCheckTellsRelativeUrlsOfModulesApart() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "relative-urls-"));
+  const transform = (source: string, file: string) =>
+    runWywTransform(`import { createStyleHandle, css } from "dx-styles";\n${source}`, file, {
+      output: "atomic",
+    });
+  const writeStyles = async (directory: string, source: string) => {
+    await mkdir(join(fixtureRoot, directory));
+    const result = await transform(source, join(fixtureRoot, directory, "styles.ts"));
+    await writeFile(join(fixtureRoot, directory, "styles.js"), result.code);
+  };
+  const compose = (first: string, second: string) =>
+    transform(
+      `import { pressed, pressedFallback, pressedRoot } from "./a/styles.js";
+      import { hovered, hoveredRoot } from "./b/styles.js";
+      export const both = css(createStyleHandle(${first}), createStyleHandle(${second}));`,
+      join(fixtureRoot, "composed.ts"),
+    );
+
+  try {
+    // One text of a relative url() in two directories names two images.
+    await writeStyles(
+      "a",
+      `export const pressed = css({ "&:active": { backgroundImage: "url(./a.png)" } });
+      export const pressedFallback = css({
+        "&:active": { backgroundImage: ["url(./a.png)", "none !important"] },
+      });
+      export const pressedRoot = css({ "&:active": { backgroundImage: "url(/a.png)" } });`,
+    );
+    await writeStyles(
+      "b",
+      `export const hovered = css({ "&:hover": { backgroundImage: "url(./a.png)" } });
+      export const hoveredRoot = css({ "&:hover": { backgroundImage: "url(/a.png)" } });`,
+    );
+    const contradiction =
+      /sets "background-image: url\(\.\/a\.png\)".*sets "background-image: url\(\.\/a\.png\)".*The semantic model applies "&:hover"/su;
+
+    // On an element that is hovered and pressed the semantic model takes the
+    // later image, the atomic model the one of :active.
+    await assert.rejects(compose("pressed", "hovered"), contradiction);
+    // So for one value of a fallback array, whose other value is !important
+    // and wins in both models.
+    await assert.rejects(compose("pressedFallback", "hovered"), contradiction);
+    // A root-relative url() names one image in every module: either wins.
+    await compose("pressedRoot", "hoveredRoot");
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+async function testAtomicStyleLabel() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const plain = css({ color: "red" });
+    export const sibling = css({ "& + &": { marginTop: 4 } });
+  `;
+  const readable = await runWywTransform(source, "atomic-label.ts", { output: "atomic" });
+  const minified = await runWywTransform(source, "atomic-label.ts", {
+    minifyClassNames: true,
+    output: "atomic",
+  });
+  const readablePlain = readExportedClassName(readable.code, "plain").split(" ");
+  const minifiedPlain = readExportedClassName(minified.code, "plain").split(" ");
+
+  // The label is the class the style gets in the semantic model, with no rule.
+  const semantic = await runWywTransform(source, "atomic-label.ts");
+  const semanticPlain = readExportedClassName(semantic.code, "plain");
+  assert.deepEqual(readablePlain.filter((token) => !ATOM_SHAPE.test(token)), [semanticPlain]);
+  assert.equal(readRulesOf(readable.cssText ?? "", semanticPlain).length, 0);
+  assert.deepEqual(minifiedPlain.filter((token) => !ATOM_SHAPE.test(token)), []);
+  assert.equal(minifiedPlain.length, 1);
+
+  // `& + &` references the class of the style, so it stays in either build.
+  for (const result of [readable, minified]) {
+    const sibling = readExportedClassName(result.code, "sibling").split(" ");
+    const styleClass = sibling.find((token) => !ATOM_SHAPE.test(token));
+    assert.ok(styleClass, sibling.join(" "));
+    assert.match(result.cssText ?? "", new RegExp(`\\.${styleClass}\\+\\.dx-`, "u"));
+  }
+}
+
+async function testAtomicInlineKeyframesMatchTheSemanticModel() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const spinner = css({
+      animation: "spin 1s linear infinite",
+      "@keyframes spin": {
+        from: { transform: "rotate(0deg)" },
+        to: { transform: "rotate(360deg)" },
+      },
+    });
+  `;
+  const semantic = await runWywTransform(source, "atomic-keyframes.ts");
+  const atomic = await runWywTransform(source, "atomic-keyframes.ts", { output: "atomic" });
+  const semanticClass = readExportedClassName(semantic.code, "spinner");
+  const keyframes = `@keyframes spin-${semanticClass}{`;
+
+  assert.ok((semantic.cssText ?? "").includes(keyframes), semantic.cssText);
+  assert.ok((atomic.cssText ?? "").includes(keyframes), atomic.cssText);
+  assert.ok(
+    (atomic.cssText ?? "").includes(`animation:spin-${semanticClass} 1s linear infinite;`),
+    atomic.cssText,
+  );
+}
+
+async function testAtomicKeyframesKeepTheirConditions() {
+  const source = `
+    import { css } from "dx-styles";
+
+    export const wave = css({
+      animation: "wave 1s infinite",
+      "@media (width > 40rem)": {
+        "@keyframes :global(wave)": { from: { opacity: 0 }, to: { opacity: 1 } },
+      },
+    });
+    export const pulse = css({
+      animation: "pulse 1s infinite",
+      "@supports (opacity: 0)": {
+        "@keyframes pulse": { from: { opacity: 0 }, to: { opacity: 1 } },
+      },
+    });
+  `;
+  const semantic = await runWywTransform(source, "atomic-keyframes-conditions.ts");
+  const atomic = await runWywTransform(source, "atomic-keyframes-conditions.ts", {
+    output: "atomic",
+  });
+  const semanticCss = semantic.cssText ?? "";
+  const atomicCss = atomic.cssText ?? "";
+  const media = "@media (width > 40rem){@-webkit-keyframes wave{";
+
+  assert.ok(semanticCss.includes(media), semanticCss);
+  assert.ok(atomicCss.includes(media), atomicCss);
+  assert.equal(atomicCss.match(/@keyframes wave\{/gu)?.length, 1, atomicCss);
+
+  const pulseClass = readExportedClassName(semantic.code, "pulse");
+  const supports = `@supports (opacity: 0){@-webkit-keyframes pulse-${pulseClass}{`;
+  assert.ok(semanticCss.includes(supports), semanticCss);
+  assert.ok(atomicCss.includes(supports), atomicCss);
+  assert.ok(
+    atomicCss.includes(`animation:pulse-${pulseClass} 1s infinite;`) ===
+      semanticCss.includes(`animation:pulse-${pulseClass} 1s infinite;`),
+    `${semanticCss}\n${atomicCss}`,
+  );
+}
+
+async function testAtomicGlobalAnimationSharesTheKeyOfAnimation() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const spinning = css({ animation: ":global(spin) 1s" });
+      export const still = css({ animation: "none" });
+    `,
+    "atomic-global-animation.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const spinning = readExportedClassName(result.code, "spinning");
+  const still = readExportedClassName(result.code, "still");
+
+  assert.deepEqual(readAtomDeclarations(cssText, spinning), ["animation:spin 1s;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, cx(spinning, still)), ["animation:none;"]);
+  assert.deepEqual(readAtomDeclarations(cssText, cx(still, spinning)), ["animation:spin 1s;"]);
+}
+
+async function testAtomicExplainListsAtoms() {
+  const result = await runWywTransform(
+    `
+      import { css, recipe } from "dx-styles";
+
+      export const first = css({ color: "red", padding: 4 });
+      export const second = css({ color: "red" });
+      export const button = recipe({ base: { color: "red" }, variants: { tone: { accent: { color: "blue" } } } });
+    `,
+    "atomic-explain.ts",
+    { output: "atomic", outputMetadata: true },
+  );
+  const { metadata } = result;
+  if (metadata == null) {
+    assert.equal(supportsWywOutputMetadata(), false);
+    return;
+  }
+
+  const first = readExportedClassName(result.code, "first");
+  const [label] = first.split(" ");
+  const colorAtom = readAtomFor(result.cssText ?? "", first, "color:red;");
+  const firstExplain = findDxStylesExplainPayload(
+    expectPresent(
+      metadata.processors.find((processor) => processor.displayName === "first"),
+      "first processor metadata is missing",
+    ).artifacts,
+  );
+  const [firstEntry] = firstExplain?.entries ?? [];
+  assert.equal(firstEntry?.kind, "css");
+  assert.deepEqual(firstEntry.atoms, readAtoms(first));
+
+  const manifest = createDxStylesExplainManifest(metadata, { source: "atomic-explain.ts" });
+  const byLabel = formatDxStylesExplainReport(manifest, [label]);
+  assert.match(byLabel, /symbol: first/u);
+  assert.ok(byLabel.includes(`atoms: ${readAtoms(first).join(" ")}`), byLabel);
+
+  const byAtom = formatDxStylesExplainReport(manifest, [colorAtom]);
+  assert.match(byAtom, /symbol: first/u);
+  assert.match(byAtom, /symbol: second/u);
+  assert.match(byAtom, /symbol: button/u);
+}
+
+async function testAtomicExplainFindsAtomsOfStyleHandles() {
+  const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
+  await mkdir(tempRootBase, { recursive: true });
+  const fixtureRoot = await mkdtemp(join(tempRootBase, "explain-handles-"));
+
+  try {
+    const library = await runWywTransform(
+      `
+        import { css } from "dx-styles";
+        export const red = css({ color: "red" });
+      `,
+      join(fixtureRoot, "red.ts"),
+      { output: "atomic" },
+    );
+    await writeFile(join(fixtureRoot, "red.js"), library.code);
+    const [redAtom] = readAtoms(readExportedClassName(library.code, "red"));
+
+    const result = await runWywTransform(
+      `
+        import { createStyleHandle, css, recipe, slotRecipe } from "dx-styles";
+        import { red } from "./red.js";
+
+        const redHandle = createStyleHandle(red);
+
+        export const padded = css(redHandle, { padding: 4 });
+        export const button = recipe({ base: redHandle, variants: { size: { s: { padding: 2 } } } });
+        export const card = slotRecipe({
+          base: { body: { margin: 0 }, root: redHandle },
+          slots: ["root", "body"],
+        });
+      `,
+      join(fixtureRoot, "padded.ts"),
+      { output: "atomic", outputMetadata: true },
+    );
+    const { metadata } = result;
+    if (metadata == null) {
+      assert.equal(supportsWywOutputMetadata(), false);
+      return;
+    }
+
+    const padded = readExportedClassName(result.code, "padded");
+    assert.ok(readAtoms(padded).includes(redAtom), padded);
+
+    const manifest = createDxStylesExplainManifest(metadata, { source: "padded.ts" });
+    const byAtom = formatDxStylesExplainReport(manifest, [redAtom]);
+    assert.match(byAtom, /symbol: padded/u);
+    assert.match(byAtom, /symbol: button/u);
+    assert.match(byAtom, /symbol: card/u);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+}
+
+async function testAtomShapedClassNameSlugFails() {
+  const source = `
+    import { css } from "dx-styles";
+    export const abcdefgh = css({ color: "red" });
+  `;
+  const atomShapedSlugs = [() => "dx-ab_12345678", "dx-a0_[title]"] as const;
+
+  for (const output of ["semantic", "atomic"] as const) {
+    for (const classNameSlug of atomShapedSlugs) {
+      await assert.rejects(
+        runWywTransform(source, "atomic-slug.ts", { classNameSlug, output }),
+        /the WyW option classNameSlug produced the class name "dx-(?:ab_12345678|a0_abcdefgh)".*remove the "dx-" prefix or the "_" from classNameSlug/su,
+      );
+    }
+  }
+
+  const ordinary = await runWywTransform(source, "atomic-slug.ts", {
+    classNameSlug: "styles-[title]",
+    output: "atomic",
+  });
+  assert.match(readExportedClassName(ordinary.code, "abcdefgh"), /^styles-abcdefgh dx-/u);
+}
+
+async function testAtomRegistryRejectsCollisions() {
+  // These two values share the value code "fj0k4bnh": the first 64 bits of the
+  // SHA-256 of their sources are equal modulo 36^8, found by a search over
+  // "<n>px". One key and one value code make one atom name for two bodies.
+  const build = (value: string) =>
+    runWywTransform(
+      `import { css } from "dx-styles";\nexport const box = css({ outlineOffset: "${value}" });`,
+      "atomic-collision.ts",
+      { output: "atomic" },
+    );
+
+  const first = await build("1428248px");
+  assert.match(
+    first.cssText ?? "",
+    /\.dx-[0-9a-z]+_fj0k4bnh\{outline-offset:1428248px;\}/u,
+  );
+  // Building the same file again registers the same body: no error.
+  await build("1428248px");
+  await assert.rejects(
+    build("4382821px"),
+    /produces the atom "dx-[0-9a-z]+_fj0k4bnh" for "outline-offset:4382821px;", but the build already has it for "outline-offset:1428248px;"\. This is a hash collision/u,
+  );
+}
+
 async function main() {
   testRuntimeHelpers();
+  testCxKeepsLastAtomPerKey();
   testRuntimeKeyframes();
   testRuntimeStyleHandles();
   testRecipePropSplitting();
@@ -4997,6 +6929,38 @@ async function main() {
   await testCssRtlTransformRejectsInvalidMarkers();
   await testCssTransformRejectsUnsupportedScalars();
   await testCssStaticParityMatrix();
+  await testSemanticOutputIsUnchanged();
+  await testAtomicCssEmitsOneAtomPerDeclaration();
+  await testAtomicNamesDependOnlyOnTheDeclaration();
+  await testAtomicCustomPropertiesKeepTheirCase();
+  await testAtomicSelectorsMatchTheSemanticModel();
+  await testAtomicStyleReferencesInsideIsAndWhere();
+  await testAtomicRulesForOtherElementsTieWithTheirOwnAtoms();
+  await testAtomicRulesForOtherElementsLoseToOwnLonghands();
+  await testAtomicOrderCheckSkipsRulesForOtherElements();
+  await testAtomicOrderRules();
+  await testAtomicOrderErrors();
+  await testAtomicPhysicalAndFlowRelativeHint();
+  await testAtomicFlowRelativeCornersMeetPhysicalOnes();
+  await testAtomicCornerShorthandsNest();
+  await testAtomicAllowedOrders();
+  await testAtomicSelectorsReadClassesAsTokens();
+  await testAtomicFallbackArrayIsOneAtom();
+  await testAtomicRelativeUrlsDependOnTheBuildRoot();
+  await testAtomicVendorPrefixesMatchTheSemanticModel();
+  await testAtomicBuildsWithAnyPreprocessor();
+  await testAtomicShorthandFamilies();
+  await testAtomicRecipesKeepTheLastAtomPerKey();
+  await testAtomicStyleHandlesComposeByKey();
+  await testAtomicOrderCheckTellsRelativeUrlsOfModulesApart();
+  await testAtomicStyleLabel();
+  await testAtomicInlineKeyframesMatchTheSemanticModel();
+  await testAtomicKeyframesKeepTheirConditions();
+  await testAtomicGlobalAnimationSharesTheKeyOfAnimation();
+  await testAtomicExplainListsAtoms();
+  await testAtomicExplainFindsAtomsOfStyleHandles();
+  await testAtomShapedClassNameSlugFails();
+  await testAtomRegistryRejectsCollisions();
   await testCreateVarTransform();
   await testCreateVarCrossFileStaticTransform();
   await testKeyframesTransform();

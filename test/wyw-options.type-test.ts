@@ -23,3 +23,29 @@ wyw({
     },
   },
 });
+
+wyw({
+  processors: {
+    dxStyles: {
+      output: "atomic",
+    },
+  },
+});
+
+wyw({
+  processors: {
+    dxStyles: {
+      minifyClassNames: true,
+      output: "semantic",
+    },
+  },
+});
+
+wyw({
+  processors: {
+    dxStyles: {
+      // @ts-expect-error dx-styles output accepts only "semantic" or "atomic".
+      output: "atoms",
+    },
+  },
+});

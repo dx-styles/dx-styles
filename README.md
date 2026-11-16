@@ -72,6 +72,9 @@ actually needs on top of that engine:
   themes are typed contracts, not naming conventions.
 - **Opt-in compile-time RTL** — [conservative physical-side overrides](./docs/rtl.md) generated at
   build time.
+- **Two output models** — one class per style by default, or [atomic output](./docs/atomic-output.md)
+  with `output: "atomic"`: one shared class per declaration, so CSS stops growing with the number of
+  components, and a build error instead of a silently different cascade.
 
 ## How it compares
 
