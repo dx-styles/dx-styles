@@ -5457,6 +5457,49 @@ async function testAtomicRulesForOtherElementsLoseToOwnLonghands() {
   assert.ok(compareSpecificity(atomicToolbar, atomicLabel) < 0);
 }
 
+// The order check compares the declarations a style sets on its own element:
+// a rule of the same style for a descendant, a child or a sibling is not on
+// that element, so it builds in the atomic model as in the semantic one.
+async function testAtomicOrderCheckSkipsRulesForOtherElements() {
+  const source = `
+    import { css, recipe } from "dx-styles";
+
+    export const box = css({
+      paddingTop: 8,
+      "& span": { padding: 4 },
+      "& > summary": { padding: 2 },
+      "& + *": { padding: 1 },
+      "&:hover": { color: "blue" },
+      "& a:hover": { color: "navy" },
+    });
+    export const button = recipe({
+      base: { paddingTop: 8 },
+      variants: { size: { small: { "& svg": { padding: 0 } } } },
+    });
+  `;
+
+  await runWywTransform(source, "atomic-other-elements-check.ts");
+  const atomic = await runWywTransform(source, "atomic-other-elements-check.ts", {
+    output: "atomic",
+  });
+  const atomicCss = atomic.cssText ?? "";
+
+  assert.match(
+    readSelectorOf(
+      atomicCss,
+      readAtomFor(atomicCss, readExportedClassName(atomic.code, "box"), "padding:4px;"),
+    ),
+    /^\.dx-[\w-]+ span$/u,
+  );
+
+  // A selector whose subject is the styled element stays in the check.
+  await assertAtomicBuildFails(
+    `export const box = css({ paddingTop: 8, ".dark &": { padding: 4 } });`,
+    "atomic-errors/own-element-in-context.ts",
+    /"padding-top: 8px".*"padding: 4px" under "\.dark &"/su,
+  );
+}
+
 async function testAtomicOrderRules() {
   const result = await runWywTransform(
     `
@@ -6505,6 +6548,7 @@ async function main() {
   await testAtomicStyleReferencesInsideIsAndWhere();
   await testAtomicRulesForOtherElementsTieWithTheirOwnAtoms();
   await testAtomicRulesForOtherElementsLoseToOwnLonghands();
+  await testAtomicOrderCheckSkipsRulesForOtherElements();
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicAllowedOrders();

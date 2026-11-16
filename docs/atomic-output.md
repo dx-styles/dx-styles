@@ -429,6 +429,11 @@ the semantic model, and nothing fails:
   and the label inside has its own `paddingLeft: 8`. In the semantic model `.toolbar span` (0,1,1)
   beats `.label` (0,1,0), and `padding-left` is `4px`. In the atomic model the longhand of the
   label repeats its class three times, (0,3,0), and beats the toolbar's atom (0,1,1): `8px`.
+- **The rules of atoms apply inside such a rule too.** `"& span": { paddingTop: 2, padding: 4 }`
+  gives `padding-top: 4px` in the semantic model, where the later declaration wins, and `2px` in
+  the atomic one, where the longhand repeats its class, (0,3,1) against (0,1,1). Inside a rule for
+  another element, order the declarations as the order rules above require, or set the property
+  in one declaration.
 
 To keep both models equal, let the ancestor set a CSS variable and the element read it in its own
 style. Then only the element's style sets the property:

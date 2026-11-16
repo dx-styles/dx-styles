@@ -284,6 +284,15 @@ function holdsStyledElement(simple: SimpleSelector): boolean {
   return subject?.some(holdsStyledElement) ?? false;
 }
 
+/**
+ * Whether a selector selects the styled element itself: its subject holds `&`,
+ * as in `&:hover` or `.dark &`. A rule for a descendant, a child or a sibling
+ * (`& span`, `& > summary`, `& + *`) selects another element.
+ */
+function selectsStyledElement(selector: string): boolean {
+  return parseComplexSelector(selector).compounds.at(-1)?.some(holdsStyledElement) ?? false;
+}
+
 function findAmpCompound(selector: ComplexSelector): readonly SimpleSelector[] {
   return selector.compounds.find((compound) => compound.some(holdsStyledElement)) ?? [];
 }
@@ -729,8 +738,10 @@ function checkValuePair(
 }
 
 /**
- * Checks every pair of declarations that can meet on one element. Parts are in
- * class-string order; `canMeet` says whether two parts can be on one element.
+ * Checks every pair of declarations that can meet on the styled element. Parts
+ * are in class-string order; `canMeet` says whether two parts can be on one
+ * element. Declarations of rules for other elements are left out: the build
+ * does not know the DOM, so it cannot tell which styles meet there.
  * Each value of a fallback array is weighed with its own `!important`: the
  * winners agree for every set of values a browser accepts only when they agree
  * for every pair of values. Throws with the place, the property, both
@@ -742,7 +753,9 @@ export function checkAtomicCascade(
   canMeet: (left: number, right: number) => boolean = () => true,
 ): void {
   const placed: Placed<CascadeDeclaration>[] = parts.flatMap((part, index) =>
-    part.declarations.map((declaration) => ({ declaration, part: index })),
+    part.declarations
+      .filter((declaration) => selectsStyledElement(declaration.selector))
+      .map((declaration) => ({ declaration, part: index })),
   );
 
   for (let laterIndex = 1; laterIndex < placed.length; laterIndex += 1) {
