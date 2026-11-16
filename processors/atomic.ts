@@ -104,26 +104,6 @@ function hashToBase36(source: string, width: number): string {
   return code;
 }
 
-let atomHash: (source: string, width: number) => string = hashToBase36;
-
-/**
- * Replaces the hash of atom codes until `run` settles. Tests use it to force a
- * collision; the build never calls it.
- */
-export async function withAtomHashForTesting<TResult>(
-  hash: (source: string, width: number) => string,
-  run: () => Promise<TResult>,
-): Promise<TResult> {
-  const previous = atomHash;
-  atomHash = hash;
-
-  try {
-    return await run();
-  } finally {
-    atomHash = previous;
-  }
-}
-
 function hasRelativeUrl(value: string): boolean {
   return [...value.matchAll(URL_PATTERN)].some(
     ([, , target]) => target.length > 0 && !ABSOLUTE_URL_PATTERN.test(target),
@@ -220,7 +200,7 @@ function readPropertyKeyCode(property: string): string {
     return tableCode;
   }
 
-  const code = `z${atomHash(`property\u0000${property}`, PROPERTY_HASH_WIDTH)}`;
+  const code = `z${hashToBase36(`property\u0000${property}`, PROPERTY_HASH_WIDTH)}`;
   registerKeyCode(code, `property "${property}"`, "property");
   return code;
 }
@@ -231,7 +211,10 @@ function readConditionKeyCode(atRules: readonly string[], selectors: readonly st
   }
 
   const condition = JSON.stringify([atRules, selectors]);
-  const code = atomHash(`condition\u0000${condition}`, CONDITION_CODE_WIDTH);
+  const code = hashToBase36(
+    `condition\u0000${condition}`,
+    CONDITION_CODE_WIDTH,
+  );
   registerKeyCode(`c${code}`, `condition ${condition}`, "condition");
   return code;
 }
@@ -512,7 +495,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     const relativeUrlScope = values.some(hasRelativeUrl)
       ? input.moduleDirectory
       : "";
-    const valueCode = atomHash(
+    const valueCode = hashToBase36(
       `value\u0000${JSON.stringify([values, relativeUrlScope])}`,
       VALUE_CODE_WIDTH,
     );

@@ -30,7 +30,6 @@ import {
   TransformCacheCollection,
 } from "@wyw-in-js/transform";
 
-import type * as AtomicModule from "../../processors/atomic.ts";
 import { findDxStylesExplainPayload } from "../../processors/explain-schema.ts";
 import { createValueNode } from "../../processors/serialization.ts";
 import {
@@ -6417,13 +6416,9 @@ async function testAtomShapedClassNameSlugFails() {
 }
 
 async function testAtomRegistryRejectsCollisions() {
-  // The built module is the one WyW loads the processors from.
-  const atomic = (await import(
-    pathToFileURL(join(process.cwd(), "processors/atomic.js")).href
-  )) as typeof AtomicModule;
-  // Every value hashes to one code, so two values of one key share a name.
-  const collidingHash = (source: string, width: number) =>
-    source.startsWith("value\u0000") ? "0".repeat(width) : "1".repeat(width);
+  // These two values share the value code "fj0k4bnh": the first 64 bits of the
+  // SHA-256 of their sources are equal modulo 36^8, found by a search over
+  // "<n>px". One key and one value code make one atom name for two bodies.
   const build = (value: string) =>
     runWywTransform(
       `import { css } from "dx-styles";\nexport const box = css({ outlineOffset: "${value}" });`,
@@ -6431,15 +6426,17 @@ async function testAtomRegistryRejectsCollisions() {
       { output: "atomic" },
     );
 
-  await atomic.withAtomHashForTesting(collidingHash, async () => {
-    await build("1px");
-    // Building the same file again registers the same body: no error.
-    await build("1px");
-    await assert.rejects(
-      build("2px"),
-      /produces the atom "dx-[0-9a-z]+_00000000" for "outline-offset:2px;", but the build already has it for "outline-offset:1px;"\. This is a hash collision/u,
-    );
-  });
+  const first = await build("1428248px");
+  assert.match(
+    first.cssText ?? "",
+    /\.dx-[0-9a-z]+_fj0k4bnh\{outline-offset:1428248px;\}/u,
+  );
+  // Building the same file again registers the same body: no error.
+  await build("1428248px");
+  await assert.rejects(
+    build("4382821px"),
+    /produces the atom "dx-[0-9a-z]+_fj0k4bnh" for "outline-offset:4382821px;", but the build already has it for "outline-offset:1428248px;"\. This is a hash collision/u,
+  );
 }
 
 async function main() {
