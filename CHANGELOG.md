@@ -1,5 +1,15 @@
 # dx-styles
 
+## 1.6.0
+
+### Minor Changes
+
+- [#44](https://github.com/dx-styles/dx-styles/pull/44) [`084f0be`](https://github.com/dx-styles/dx-styles/commit/084f0be7b41c366b21a88ceb7aec2c959566d171) Thanks [@Anber](https://github.com/Anber)! - Add an atomic output model. With `processors.dxStyles.output: "atomic"`, `css()`, `recipe()` and `slotRecipe()` emit one shared class per declaration, ranked by fixed rules instead of CSS order, and the build fails when a style's result would depend on declaration order or differ from the default model. `cx` now keeps only the last atom of each property and condition. A WyW `classNameSlug` that produces class names of the atom shape (`dx-<key>_<value>`) is now a build error in either model.
+
+### Patch Changes
+
+- [#47](https://github.com/dx-styles/dx-styles/pull/47) [`3d0545f`](https://github.com/dx-styles/dx-styles/commit/3d0545f8e1236f17f2174ba51572350a9801352b) Thanks [@Anber](https://github.com/Anber)! - Require WyW 2.7.2 or newer. This moves `minimatch` from the 9.x line, which has no fix for a denial-of-service advisory, to 11.0.5. Update your bundler integration (`@wyw-in-js/vite`, `@wyw-in-js/nextjs` and the like) to 2.7.2 as well: it pins the exact version of `@wyw-in-js/transform`.
+
 ## 1.5.0
 
 ### Minor Changes
