@@ -6341,72 +6341,49 @@ async function testAtomicOrderCheckTellsRelativeUrlsOfModulesApart() {
   const tempRootBase = join(process.cwd(), ".tmp", "dx-styles-atomic-tests");
   await mkdir(tempRootBase, { recursive: true });
   const fixtureRoot = await mkdtemp(join(tempRootBase, "relative-urls-"));
+  const transform = (source: string, file: string) =>
+    runWywTransform(`import { createStyleHandle, css } from "dx-styles";\n${source}`, file, {
+      output: "atomic",
+    });
+  const writeStyles = async (directory: string, source: string) => {
+    await mkdir(join(fixtureRoot, directory));
+    const result = await transform(source, join(fixtureRoot, directory, "styles.ts"));
+    await writeFile(join(fixtureRoot, directory, "styles.js"), result.code);
+  };
+  const compose = (first: string, second: string) =>
+    transform(
+      `import { pressed, pressedFallback, pressedRoot } from "./a/styles.js";
+      import { hovered, hoveredRoot } from "./b/styles.js";
+      export const both = css(createStyleHandle(${first}), createStyleHandle(${second}));`,
+      join(fixtureRoot, "composed.ts"),
+    );
 
   try {
     // One text of a relative url() in two directories names two images.
-    const writeStyles = async (directory: string, source: string) => {
-      await mkdir(join(fixtureRoot, directory), { recursive: true });
-      const result = await runWywTransform(source, join(fixtureRoot, directory, "styles.ts"), {
-        output: "atomic",
-      });
-      await writeFile(join(fixtureRoot, directory, "styles.js"), result.code);
-    };
     await writeStyles(
       "a",
-      `
-        import { css } from "dx-styles";
-
-        export const pressed = css({ "&:active": { backgroundImage: "url(./a.png)" } });
-        export const pressedFallback = css({
-          "&:active": { backgroundImage: ["url(./a.png)", "none !important"] },
-        });
-        export const pressedRoot = css({ "&:active": { backgroundImage: "url(/a.png)" } });
-      `,
+      `export const pressed = css({ "&:active": { backgroundImage: "url(./a.png)" } });
+      export const pressedFallback = css({
+        "&:active": { backgroundImage: ["url(./a.png)", "none !important"] },
+      });
+      export const pressedRoot = css({ "&:active": { backgroundImage: "url(/a.png)" } });`,
     );
     await writeStyles(
       "b",
-      `
-        import { css } from "dx-styles";
-
-        export const hovered = css({ "&:hover": { backgroundImage: "url(./a.png)" } });
-        export const hoveredRoot = css({ "&:hover": { backgroundImage: "url(/a.png)" } });
-      `,
+      `export const hovered = css({ "&:hover": { backgroundImage: "url(./a.png)" } });
+      export const hoveredRoot = css({ "&:hover": { backgroundImage: "url(/a.png)" } });`,
     );
-    const compose = (body: string) =>
-      runWywTransform(
-        `
-          import { createStyleHandle, css } from "dx-styles";
-          import { pressed, pressedFallback, pressedRoot } from "./a/styles.js";
-          import { hovered, hoveredRoot } from "./b/styles.js";
-
-          ${body}
-        `,
-        join(fixtureRoot, "composed.ts"),
-        { output: "atomic" },
-      );
     const contradiction =
       /sets "background-image: url\(\.\/a\.png\)".*sets "background-image: url\(\.\/a\.png\)".*The semantic model applies "&:hover"/su;
 
-    // Both apply on an element that is hovered and pressed: the semantic model
-    // takes the later image, the atomic model the one of :active.
-    await assert.rejects(
-      compose(
-        "export const both = css(createStyleHandle(pressed), createStyleHandle(hovered));",
-      ),
-      contradiction,
-    );
-    // The same holds for one value of a fallback array; its other value is
-    // !important and wins in both models.
-    await assert.rejects(
-      compose(
-        "export const both = css(createStyleHandle(pressedFallback), createStyleHandle(hovered));",
-      ),
-      contradiction,
-    );
-    // A root-relative url() names one image in every module, so either wins.
-    await compose(
-      "export const both = css(createStyleHandle(pressedRoot), createStyleHandle(hoveredRoot));",
-    );
+    // On an element that is hovered and pressed the semantic model takes the
+    // later image, the atomic model the one of :active.
+    await assert.rejects(compose("pressed", "hovered"), contradiction);
+    // So for one value of a fallback array, whose other value is !important
+    // and wins in both models.
+    await assert.rejects(compose("pressedFallback", "hovered"), contradiction);
+    // A root-relative url() names one image in every module: either wins.
+    await compose("pressedRoot", "hoveredRoot");
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
