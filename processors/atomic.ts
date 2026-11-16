@@ -516,6 +516,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     // Each value of a fallback array is a declaration of its own in the cascade.
     const cascadeValues = values.map((entry) => ({
       important: IMPORTANT_PATTERN.test(entry),
+      urlScope: hasRelativeUrl(entry) ? input.moduleDirectory : "",
       value: entry.replace(IMPORTANT_PATTERN, "").trim(),
     }));
     const atomDeclarations = relativeSelectors.map((selector, index) => ({

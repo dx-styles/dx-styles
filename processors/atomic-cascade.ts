@@ -29,6 +29,11 @@ export type Specificity = readonly [number, number, number];
 /** One value of a declaration with its own priority. */
 export interface CascadeValue {
   readonly important: boolean;
+  /**
+   * The directory a relative `url()` of the value resolves against, empty
+   * when it has none: one text in two directories names two resources.
+   */
+  readonly urlScope: string;
   readonly value: string;
 }
 
@@ -747,13 +752,18 @@ interface Placed<T> {
   readonly part: number;
 }
 
+function isSameValue(left: CascadeValue, right: CascadeValue): boolean {
+  return (
+    left.value === right.value &&
+    left.important === right.important &&
+    left.urlScope === right.urlScope
+  );
+}
+
 function haveSameValues(left: CascadeDeclaration, right: CascadeDeclaration): boolean {
   return (
     left.values.length === right.values.length &&
-    left.values.every(
-      ({ important, value }, index) =>
-        value === right.values[index].value && important === right.values[index].important,
-    )
+    left.values.every((value, index) => isSameValue(value, right.values[index]))
   );
 }
 
@@ -826,11 +836,7 @@ export function checkAtomicCascade(
 
       for (const xValue of x.values) {
         for (const yValue of y.values) {
-          if (
-            x.property === y.property &&
-            xValue.value === yValue.value &&
-            xValue.important === yValue.important
-          ) {
+          if (x.property === y.property && isSameValue(xValue, yValue)) {
             continue;
           }
 
