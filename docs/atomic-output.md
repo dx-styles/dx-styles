@@ -195,6 +195,30 @@ css({
 });
 ```
 
+**A physical and a flow-relative property.** The writing mode is not known at build time, and in
+a vertical one the inline start is the top or the bottom, so `marginTop` and `marginInlineStart`
+can set the same side. There is no order rule for them, even under one condition. Write both in
+one system: the flow-relative counterpart of the physical property when the style follows the
+writing direction, or the physical counterpart of the flow-relative one when it does not. The
+error names the counterparts:
+
+```ts
+css({ marginTop: 8, marginInlineStart: 4 }); // error
+css({ marginBlockStart: 8, marginInlineStart: 4 }); // fine
+css({ marginTop: 8, marginLeft: 4 }); // fine
+
+css({ position: "fixed", top: 0, insetInlineEnd: 0 }); // error
+css({ position: "fixed", insetBlockStart: 0, insetInlineEnd: 0 }); // fine
+
+css({ height: 40, inlineSize: 200 }); // error
+css({ blockSize: 40, inlineSize: 200 }); // fine
+```
+
+The warning `dx-styles/physical-direction-property` suggests a flow-relative property only for
+the inline sides (`paddingLeft` to `paddingInlineStart`, `left` to `insetInlineStart`). In the
+atomic model a style that follows it and also sets a block side has to move that side too:
+`paddingTop` to `paddingBlockStart`, `top` to `insetBlockStart`.
+
 **Conditions that never meet.** The check skips pairs whose conditions it can prove exclusive.
 It proves exactly four forms:
 

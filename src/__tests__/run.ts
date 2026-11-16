@@ -5621,12 +5621,12 @@ async function testAtomicOrderErrors() {
   await assertAtomicBuildFails(
     `export const vertical = css({ blockSize: 10, width: 20 });`,
     "atomic-errors/vertical-size.ts",
-    /"block-size: 10px".*"width: 20px".*"block-size" and "width" have no order rule/su,
+    /"block-size: 10px".*"width: 20px".*"width" is physical and "block-size" flow-relative/su,
   );
   await assertAtomicBuildFails(
     `export const vertical = css({ paddingInlineStart: 4, paddingTop: 8 });`,
     "atomic-errors/vertical-side.ts",
-    /"padding-inline-start" and "padding-top" have no order rule/su,
+    /"padding-top" is physical and "padding-inline-start" flow-relative/su,
   );
   // A shorthand also resets the properties it cannot set: border resets border-image.
   await assertAtomicBuildFails(
@@ -5715,6 +5715,63 @@ async function testAtomicBuildsWithAnyPreprocessor() {
       assert.ok((result.cssText ?? "").includes(`.${atom}`), `${atom} has no rule`);
     }
   }
+}
+
+async function testAtomicPhysicalAndFlowRelativeHint() {
+  const reason =
+    "the writing mode is not known at build time, so they can set the same physical property";
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ marginTop: 8, marginInlineStart: 4 });`,
+    "atomic-errors/physical-margin.ts",
+    new RegExp(
+      `"margin-top" is physical and "margin-inline-start" flow-relative, and ${reason}: write both in one system, "margin-block-start" instead of "margin-top", or "margin-left" instead of "margin-inline-start" if the style does not need to follow the writing direction`,
+      "su",
+    ),
+  );
+  await assertAtomicBuildFails(
+    `export const toast = css({ position: "fixed", top: 0, insetInlineEnd: 0 });`,
+    "atomic-errors/physical-inset.ts",
+    new RegExp(
+      `"top" is physical and "inset-inline-end" flow-relative, and ${reason}: write both in one system, "inset-block-start" instead of "top", or "right" instead of "inset-inline-end"`,
+      "su",
+    ),
+  );
+  await assertAtomicBuildFails(
+    `export const panel = css({ height: 40, inlineSize: 200 });`,
+    "atomic-errors/physical-size.ts",
+    new RegExp(
+      `"height" is physical and "inline-size" flow-relative, and ${reason}: write both in one system, "block-size" instead of "height", or "width" instead of "inline-size"`,
+      "su",
+    ),
+  );
+
+  // The rewrites the hints name build.
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginBlockStart: 8, marginInlineStart: 4 });
+      export const toolbarPhysical = css({ marginTop: 8, marginLeft: 4 });
+      export const toast = css({ position: "fixed", insetBlockStart: 0, insetInlineEnd: 0 });
+      export const toastPhysical = css({ position: "fixed", top: 0, right: 0 });
+      export const panel = css({ blockSize: 40, inlineSize: 200 });
+      export const panelPhysical = css({ height: 40, width: 200 });
+    `,
+    "atomic-physical-rewrites.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  [
+    "margin-block-start:8px;",
+    "margin-inline-start:4px;",
+    "inset-block-start:0;",
+    "inset-inline-end:0;",
+    "block-size:40px;",
+    "inline-size:200px;",
+    "margin-top:8px;",
+    "right:0;",
+    "height:40px;",
+  ].forEach((declaration) => assert.ok(cssText.includes(declaration), cssText));
 }
 
 async function testAtomicAllowedOrders() {
@@ -6551,6 +6608,7 @@ async function main() {
   await testAtomicOrderCheckSkipsRulesForOtherElements();
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
+  await testAtomicPhysicalAndFlowRelativeHint();
   await testAtomicAllowedOrders();
   await testAtomicSelectorsReadClassesAsTokens();
   await testAtomicFallbackArrayIsOneAtom();

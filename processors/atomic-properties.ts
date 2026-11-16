@@ -522,3 +522,46 @@ export function propertiesOverlap(left: string, right: string): boolean {
     [...rightModes[mode]].some((longhand) => leftLonghands.has(longhand)),
   );
 }
+
+/** Whether the physical longhands a property sets depend on the writing mode. */
+export function isFlowRelative(property: string): boolean {
+  const [first, ...rest] = collectAffectedLonghands(property);
+  return rest.some(
+    (longhands) =>
+      longhands.size !== first.size || [...longhands].some((longhand) => !first.has(longhand)),
+  );
+}
+
+// horizontal-tb with ltr, the initial writing mode.
+const initialWritingMode = writingModes[0];
+
+let flowRelativeCounterparts: Map<string, string> | undefined;
+
+/**
+ * The flow-relative property of the code table that sets this physical
+ * property in the initial writing mode (`margin-block-start` for `margin-top`,
+ * `block-size` for `height`), or null when there is none.
+ */
+export function readFlowRelativeCounterpart(property: string): null | string {
+  flowRelativeCounterparts ??= new Map(
+    PROPERTY_CODE_TABLE.filter(isFlowRelative)
+      .map((flowRelative) => [toPhysical(flowRelative, initialWritingMode), flowRelative] as const)
+      .filter(([physical]) => propertyCodes.has(physical) && !isFlowRelative(physical)),
+  );
+
+  return flowRelativeCounterparts.get(property) ?? null;
+}
+
+/**
+ * The physical property of the code table that a flow-relative property sets in
+ * the initial writing mode (`margin-left` for `margin-inline-start`), or null
+ * when it sets more than one (`margin-inline`).
+ */
+export function readPhysicalCounterpart(property: string): null | string {
+  if (!isFlowRelative(property)) {
+    return null;
+  }
+
+  const physical = toPhysical(property, initialWritingMode);
+  return physical !== property && propertyCodes.has(physical) ? physical : null;
+}

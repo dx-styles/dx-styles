@@ -8,7 +8,13 @@
  * on every pair of declarations that can meet on one element and fails when
  * they pick a different winner, or when the atomic model cannot pick one.
  */
-import { propertiesOverlap, readLonghandDepth } from "./atomic-properties.js";
+import {
+  isFlowRelative,
+  propertiesOverlap,
+  readFlowRelativeCounterpart,
+  readLonghandDepth,
+  readPhysicalCounterpart,
+} from "./atomic-properties.js";
 import {
   findClosingToken,
   type SelectorToken,
@@ -653,12 +659,34 @@ function describeAtomicRule(winner: WeighedDeclaration, loser: WeighedDeclaratio
   return "the remaining selector specificity decides";
 }
 
+/** The hint for a physical and a flow-relative property, or null for another pair. */
+function describeWritingModeHint(physical: string, flowRelative: string): null | string {
+  const flowRelativeOfPhysical = readFlowRelativeCounterpart(physical);
+  if (flowRelativeOfPhysical === null || !isFlowRelative(flowRelative)) {
+    return null;
+  }
+
+  const physicalOfFlowRelative = readPhysicalCounterpart(flowRelative);
+  const physicalRewrite =
+    physicalOfFlowRelative === null
+      ? ""
+      : `, or "${physicalOfFlowRelative}" instead of "${flowRelative}" if the style does not need to follow the writing direction`;
+  return `"${physical}" is physical and "${flowRelative}" flow-relative, and the writing mode is not known at build time, so they can set the same physical property: write both in one system, "${flowRelativeOfPhysical}" instead of "${physical}"${physicalRewrite}`;
+}
+
 function describeTieHint(earlier: WeighedDeclaration, later: WeighedDeclaration): string {
   const earlierMedia = earlier.atRules.filter((atRule) => /^@media/iu.test(atRule)).join(" ");
   const laterMedia = later.atRules.filter((atRule) => /^@media/iu.test(atRule)).join(" ");
 
   if (earlierMedia !== laterMedia && earlierMedia.length > 0 && laterMedia.length > 0) {
     return "overlapping @media conditions on one property have no order rule: rewrite them into ranges that do not overlap, e.g. @media (width >= 40rem) and (width < 64rem)";
+  }
+
+  const writingModeHint =
+    describeWritingModeHint(earlier.property, later.property) ??
+    describeWritingModeHint(later.property, earlier.property);
+  if (writingModeHint !== null) {
+    return writingModeHint;
   }
 
   if (earlier.property !== later.property) {
