@@ -10,7 +10,6 @@
  */
 import {
   isFlowRelative,
-  overlapDependsOnWritingMode,
   propertiesOverlap,
   readFlowRelativeCounterpart,
   readLonghandDepth,
@@ -348,7 +347,7 @@ export function isConditionalAtRule(atRule: string): boolean {
   return conditionalAtRules.has(/^@[\w-]+/u.exec(atRule)?.[0].toLowerCase() ?? "");
 }
 
-/** The atom's repeat count of its class: `1 + L + 3·A + 6·P`. */
+/** The atom's repeat count of its class: `1 + L + 4·A + 8·P`. */
 export function readAtomRepeatCount(
   property: string,
   atRules: readonly string[],
@@ -357,7 +356,7 @@ export function readAtomRepeatCount(
   const depth = readLonghandDepth(property);
   const inAtRule = atRules.some(isConditionalAtRule) ? 1 : 0;
 
-  return 1 + depth + 3 * inAtRule + 6 * readPseudoClassRank(selector);
+  return 1 + depth + 4 * inAtRule + 8 * readPseudoClassRank(selector);
 }
 
 interface WidthInterval {
@@ -768,23 +767,6 @@ function haveSameValues(left: CascadeDeclaration, right: CascadeDeclaration): bo
   );
 }
 
-/**
- * The declaration as if its atom did not repeat its class for the longhand
- * depth. The specificity is read again from the selector, so a repeat that
- * adds nothing, as under `:where(&)`, is not taken away.
- */
-function withoutDepth(declaration: WeighedDeclaration): WeighedDeclaration {
-  const { atRules, property, selector } = declaration;
-  const repeatCount =
-    readAtomRepeatCount(property, atRules, selector) -
-    readLonghandDepth(property);
-  const ampSpecificity: Specificity = [0, repeatCount, 0];
-  return {
-    ...declaration,
-    atomicSpecificity: readSelectorSpecificity(selector, ampSpecificity),
-  };
-}
-
 /** Compares the winners of both models for two values that meet on one element. */
 function checkValuePair(
   file: string,
@@ -795,18 +777,9 @@ function checkValuePair(
   const x = earlier.declaration;
   const y = later.declaration;
   const semanticWinner = compareWeight(x, y, "semanticSpecificity") > 0 ? earlier : later;
-  // Of two atoms with one key, the class string keeps the later one. The depth
-  // of a longhand orders nothing between properties whose overlap depends on
-  // the writing mode: under one condition they have no order rule.
-  const writingModeDependent = x.properties.some((left) =>
-    y.properties.some((right) => overlapDependsOnWritingMode(left, right)),
-  );
+  // Of two atoms with one key, the class string keeps the later one.
   const atomicOrder =
-    x.key === y.key
-      ? -1
-      : writingModeDependent
-        ? compareWeight(withoutDepth(x), withoutDepth(y), "atomicSpecificity")
-        : compareWeight(x, y, "atomicSpecificity");
+    x.key === y.key ? -1 : compareWeight(x, y, "atomicSpecificity");
 
   if (atomicOrder === 0) {
     throw new Error(

@@ -62,16 +62,31 @@ that promise: see [rules that style other elements](#rules-that-style-other-elem
 Every atom's selector repeats its class `r` times:
 
 ```text
-r = 1 + L + 3·A + 6·P
+r = 1 + L + 4·A + 8·P
 ```
 
-- `L` — the longhand depth of the property: 0 for a shorthand or a property outside any family
-  (`border`, `color`), 1 for a shorthand inside a shorthand (`border-top`, `border-color`,
-  `padding-inline`), 2 for a longhand of a family (`border-top-color`, `padding-top`). A
-  shorthand also counts the properties it resets but cannot set: `border` resets `border-image`,
+- `L` — the level of the property in the tree of shorthands, from 0 to 3. A property is nested
+  in a shorthand when either holds:
+  - in every writing mode the shorthand sets every longhand the property sets, and the property
+    does not set every longhand of the shorthand;
+  - the property is a physical longhand, and the shorthand a flow-relative one that sets it in
+    some writing mode.
+
+  A property nested in no shorthand has level 0; any other property is one level above the
+  highest shorthand it is nested in. For example:
+  - `margin` 0; `margin-inline` and `margin-block` 1; `margin-top` 2, because it is nested in
+    `margin`, in `margin-block` and in `margin-inline` (which sets `margin-top` in a vertical
+    writing mode); `margin-inline-start` 2. So are `padding-left` and `top`.
+  - `background` 0, `background-color` 1.
+  - `border` 0; `border-top`, `border-color` and `border-inline` 1; `border-inline-color` 2;
+    `border-top-color` 3, because it is nested in `border-inline-color`.
+  - `corner` 0; `corner-top`, `border-radius` and `corner-shape` 1; `border-top-radius` and
+    `corner-top-left` 2; `border-top-left-radius` and `corner-top-left-shape` 3.
+
+  A shorthand also counts the properties it resets but cannot set: `border` resets `border-image`,
   `font` resets `font-kerning`, `font-size-adjust`, `font-feature-settings` and the like, so these
-  count as its sub-properties. A legacy name (`word-wrap`, `grid-gap`) counts as the property it
-  sets.
+  are nested in it. A legacy name (`word-wrap`, `grid-gap`) counts as the property it sets.
+
 - `A` — 1 when the declaration is inside `@media`, `@supports`, `@container` or
   `@starting-style`, otherwise 0.
 - `P` — the rank of the pseudo-class of the styled element:
@@ -91,8 +106,8 @@ The rest of the selector keeps its natural specificity on top. So:
 1. A higher pseudo-class rank wins first: `&:hover` beats a declaration inside `@media`, as in
    the semantic model, where `.c:hover` is more specific than `.c` inside `@media`.
 2. Then a declaration inside an at-rule beats one outside it.
-3. Then a longhand beats its shorthand: `padding-top` beats `padding`, `border-top-color` beats
-   `border-top` and `border`.
+3. Then a property beats the shorthands it is nested in: `padding-top` beats `padding`,
+   `border-top-color` beats `border-top` and `border`, `border-radius` beats `corner`.
 4. A condition outside the table (`[data-state="open"]`, `:checked`, `:dir(rtl) &`, a descendant)
    keeps its natural specificity, so a conditional declaration still beats an unconditional one.
 
@@ -110,9 +125,11 @@ css({
 `:active` (3) beats `:hover` (1), as it does in the semantic model with this order.
 
 Two declarations with no rule between them have no winner: `:focus` and `:focus-visible` (same
-rank), `border-top` and `border-color` (overlapping families of one depth), a physical and a
-flow-relative property (`padding-left` and `padding-inline-start`, `width` and `block-size`),
-`all` and a property it resets (`color`; custom properties, `direction` and `unicode-bidi` are
+rank), two overlapping properties of one level where neither is nested in the other
+(`border-top` and `border-color`, `border-inline` and `border-top`, `border-radius` and
+`corner-top`, `corner-shape` and `corner-top`), a physical and a flow-relative property of one
+level (`padding-left` and `padding-inline-start`, `width` and `block-size`), `all` and a property
+it resets (`color`; custom properties, `direction` and `unicode-bidi` are
 not reset by `all`), or two `@media` conditions that overlap. They fail the build, unless both
 set one property to one value: then either wins with the same result.
 
@@ -132,12 +149,15 @@ css({
 
 The writing mode is not known at build time. In a vertical one the block axis is horizontal, so a
 flow-relative side, size or corner can be any physical one: `padding-inline-start` overlaps
-`padding-top` as well as `padding-left`. Two flow-relative properties are compared in one writing
+`padding-top` as well as `padding-left`. A flow-relative property belongs to the families of its
+physical counterparts in every writing mode, and within a family a physical and a flow-relative
+property are ordered like any two properties: of two different levels the deeper one wins, and
+two of one level have no order rule. Two flow-relative properties are compared in one writing
 mode at a time, so the ones that never meet in any mode stay independent: `padding-inline` and
 `padding-block`, `margin-inline-start` and `margin-inline-end`, `inline-size` and `block-size`.
 
-The longest selector is 30 classes, for a longhand under `:disabled` inside `@media`. It
-compresses well.
+The longest selector is 40 classes, for a property of level 3 (a longhand of a border side or a
+corner, such as `border-top-color`) under `:disabled` inside `@media`. It compresses well.
 
 ## Build errors and how to rewrite
 
@@ -201,10 +221,10 @@ css({
 
 **A physical and a flow-relative property.** The writing mode is not known at build time, and in
 a vertical one the inline start is the top or the bottom, so `marginTop` and `marginInlineStart`
-can set the same side. There is no order rule for them, even under one condition. Write both in
-one system: the flow-relative counterpart of the physical property when the style follows the
-writing direction, or the physical counterpart of the flow-relative one when it does not. The
-error names the counterparts:
+can set the same side. Both are of level 2, so there is no order rule for them, even under one
+condition. Write both in one system: the flow-relative counterpart of the physical property when
+the style follows the writing direction, or the physical counterpart of the flow-relative one
+when it does not. The error names the counterparts:
 
 ```ts
 css({ marginTop: 8, marginInlineStart: 4 }); // error
@@ -218,11 +238,22 @@ css({ height: 40, inlineSize: 200 }); // error
 css({ blockSize: 40, inlineSize: 200 }); // fine
 ```
 
-A shorthand does not change this: `marginInline` sets `marginTop` in a vertical writing mode and
-no side of it in a horizontal one, so `css({ marginInline: 4, marginTop: 8 })` fails too. A
-physical shorthand that sets every side or corner (`padding`, `inset`, `borderRadius`) sets every
-flow-relative one in any writing mode, so the longhand rule orders them as usual:
-`css({ padding: 0, paddingInlineStart: 8 })` builds.
+Of two different levels the deeper property wins, as for any two properties of a family.
+`marginInline` sets `marginTop` in a vertical writing mode, so `marginTop` is nested in it: where
+both set the top margin, the semantic model applies the later `marginTop`, and so does the atomic
+one, whose `marginTop` atom repeats its class more often. In the opposite order the semantic
+model applies `marginInline` there, and the build fails with a hint to reorder:
+
+```ts
+css({ marginInline: 4, marginTop: 8 }); // fine
+css({ marginTop: 8, marginInline: 4 }); // error: reorder the declarations
+```
+
+Under `:where(&)` both atoms have no specificity at all, so nothing orders the pair, in either
+order: `css({ ":where(&)": { marginTop: 8, marginInline: 4 } })` fails. Move one of them out of
+`:where(&)`, or write both in one system. A physical shorthand that sets every side or corner
+(`padding`, `inset`, `borderRadius`) sets every flow-relative one in any writing mode, so the
+longhand rule orders them as usual: `css({ padding: 0, paddingInlineStart: 8 })` builds.
 
 The warning `dx-styles/physical-direction-property` suggests a flow-relative property only for
 the inline sides (`paddingLeft` to `paddingInlineStart`, `left` to `insetInlineStart`). In the
@@ -344,9 +375,12 @@ Ship libraries in the semantic model: their class names are stable and serve as 
 
 ## Overriding atoms with external CSS
 
-An atom's selector repeats its class up to 30 times, so an ordinary selector of external CSS does
-not beat it, and CSS inside `@layer` always loses to atoms, which are outside layers. Three ways
-work:
+An atom without a condition repeats its class 1 to 4 times, by the level of its property, and
+an atom with a condition up to 40 times. External CSS beats an atom only with a higher
+specificity; with an equal one the order of the stylesheets decides. For example, the atom of
+`backgroundColor` without a condition is 2 classes, so `.a .b .c` (three classes) beats it, while
+the atom of `paddingLeft` is 3 classes, and the same rule only ties with it. CSS inside `@layer`
+always loses to atoms, which are outside layers. Three ways work:
 
 1. Pass the value through a CSS variable that the style reads:
 

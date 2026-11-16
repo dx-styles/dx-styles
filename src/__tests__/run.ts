@@ -5540,6 +5540,36 @@ async function testAtomicOrderRules() {
   // A pseudo-class of the base wins over the base inside @media.
   assert.ok(specificity("color:blue;") > specificity("color:red;"));
 
+  // r = 1 + L + 4·A + 8·P classes, L the level of the property among the
+  // shorthands it is nested in: background-color 1 (in background), padding-left
+  // 2 (in padding and padding-inline), border-top-color 3 (in border-inline-color).
+  const levels = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const levels = css({
+        backgroundColor: "red",
+        paddingLeft: 4,
+        borderTopColor: "blue",
+        "@media (width >= 40rem)": { borderTopLeftRadius: 4 },
+        "&:hover": { corner: "8px round" },
+      });
+    `,
+    "atomic-levels.ts",
+    { output: "atomic" },
+  );
+  const levelsCss = levels.cssText ?? "";
+  const levelsClass = readExportedClassName(levels.code, "levels");
+  const levelSpecificity = (declaration: string) =>
+    readSpecificityOf(levelsCss, levelsClass, declaration);
+  assert.equal(levelSpecificity("background-color:red;"), 2);
+  assert.equal(levelSpecificity("padding-left:4px;"), 3);
+  assert.equal(levelSpecificity("border-top-color:blue;"), 4);
+  // A longhand of level 3 inside @media: 1 + 3 + 4 = 8 classes; a shorthand of
+  // level 0 under :hover: 1 + 8 classes and the pseudo-class.
+  assert.equal(levelSpecificity("border-top-left-radius:4px;"), 8);
+  assert.equal(levelSpecificity("corner:8px round;"), 10);
+
   // `:disabled` inside `:not()` adds its specificity, not the rank of :disabled.
   const guarded = readExportedClassName(result.code, "guarded");
   const guardedHover = readSpecificityOf(cssText, guarded, "color:royalblue;");
@@ -5767,25 +5797,42 @@ async function testAtomicPhysicalAndFlowRelativeHint() {
     ),
   );
 
-  // A flow-relative shorthand next to a physical longhand: the longhand is deeper,
-  // but in horizontal-tb they set no common side, so depth orders nothing.
+  // A physical longhand is nested in a flow-relative shorthand that sets it in
+  // some writing mode, so the later longhand wins in both models wherever they
+  // set one side, and the earlier one is a build error.
+  const longhandLater = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginInline: 4, marginTop: 8 });
+      export const padded = css({ paddingInline: 4, paddingTop: 8 });
+      export const frame = css({ borderInline: "1px solid red", borderTopColor: "blue" });
+    `,
+    "atomic-physical-longhand-later.ts",
+    { output: "atomic" },
+  );
+  const longhandLaterCss = longhandLater.cssText ?? "";
+  const toolbar = readExportedClassName(longhandLater.code, "toolbar");
+  assert.ok(
+    readSpecificityOf(longhandLaterCss, toolbar, "margin-top:8px;") >
+      readSpecificityOf(longhandLaterCss, toolbar, "margin-inline:4px;"),
+    longhandLaterCss,
+  );
+  ["padding-inline:4px;", "padding-top:8px;", "border-top-color:blue;"].forEach(
+    (declaration) =>
+      assert.ok(longhandLaterCss.includes(declaration), longhandLaterCss),
+  );
   await assertAtomicBuildFails(
-    `export const toolbar = css({ marginInline: 4, marginTop: 8 });`,
+    `export const toolbar = css({ marginTop: 8, marginInline: 4 });`,
     "atomic-errors/physical-margin-inline.ts",
-    new RegExp(
-      `"margin-top" is physical and "margin-inline" flow-relative, and ${reason}: write both in one system, "margin-block-start" instead of "margin-top"`,
-      "su",
-    ),
+    /"margin-top: 8px".*"margin-inline: 4px".*a longhand wins over its shorthand.*reorder the declarations/su,
   );
+  // The semantic model applies the more specific .dark &, the atomic model the
+  // longhand, whose atom repeats its class more often.
   await assertAtomicBuildFails(
-    `export const toolbar = css({ paddingInline: 4, paddingTop: 8 });`,
-    "atomic-errors/physical-padding-inline.ts",
-    /"padding-top" is physical and "padding-inline" flow-relative/su,
-  );
-  await assertAtomicBuildFails(
-    `export const frame = css({ borderInline: "1px solid red", borderTopColor: "blue" });`,
-    "atomic-errors/physical-border-inline.ts",
-    /"border-top-color" is physical and "border-inline" flow-relative.*"border-block-start-color" instead of "border-top-color"/su,
+    `export const frame = css({ borderTopColor: "blue", ".dark &": { borderInline: "1px solid red" } });`,
+    "atomic-errors/physical-border-inline-dark.ts",
+    /"border-top-color: blue".*"border-inline: 1px solid red" under "\.dark &".*The semantic model applies "\.dark &".*a longhand wins over its shorthand/su,
   );
 
   // A physical shorthand that sets every side or corner contains the
@@ -5819,7 +5866,7 @@ async function testAtomicPhysicalAndFlowRelativeHint() {
   await assertAtomicBuildFails(
     `export const toolbar = css({ ":where(&)": { marginTop: 8, marginInline: 4 } });`,
     "atomic-errors/physical-margin-inline-where.ts",
-    /"margin-top" is physical and "margin-inline" flow-relative/su,
+    /the atomic model has no rule that orders these two declarations.*"margin-top" is physical and "margin-inline" flow-relative/su,
   );
   const outsideWhere = await runWywTransform(
     `
@@ -5878,12 +5925,12 @@ async function testAtomicFlowRelativeCornersMeetPhysicalOnes() {
     "atomic-errors/physical-corner-shape.ts",
     /"corner-top-left-shape" is physical and "corner-start-start-shape" flow-relative.*"corner-start-start-shape" instead of "corner-top-left-shape", or "corner-top-left-shape" instead of "corner-start-start-shape"/su,
   );
-  // The side radius shorthands (§3.6.1) set two corners each: the top-left one
-  // in horizontal-tb ltr, and no top-left corner in vertical-rl.
+  // The side radius shorthands (§3.6.1) set two corners each, and a physical
+  // corner is nested in a flow-relative side that sets it in some writing mode.
   await assertAtomicBuildFails(
     `export const card = css({ borderTopLeftRadius: "4px", borderBlockStartRadius: "8px" });`,
     "atomic-errors/logical-side-radius.ts",
-    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*"border-top-left-radius" is physical and "border-block-start-radius" flow-relative/su,
+    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*a longhand wins over its shorthand/su,
   );
   // The corner shorthands (§3.9) set the shape and the radius of their corners.
   await assertAtomicBuildFails(
@@ -5912,6 +5959,66 @@ async function testAtomicFlowRelativeCornersMeetPhysicalOnes() {
   const cssText = result.cssText ?? "";
   ["corner-start-start-shape:bevel;", "corner-top-left-shape:bevel;", "border-block-start-radius:4px;"].forEach(
     (declaration) => assert.ok(cssText.includes(declaration), cssText),
+  );
+}
+
+// CSS Borders 4: corner sets every corner-*-shape and border-*-radius longhand
+// (§3.9.3), as border-radius (§3.6.2) and corner-shape (§3.8.2) together do;
+// corner-top sets the two of its side (§3.9.2), as border-top-radius (§3.6.1)
+// and corner-top-shape (§3.8.1) do.
+async function testAtomicCornerShorthandsNest() {
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const radius = css({ corner: "16px round", borderRadius: "8px" });
+      export const shape = css({ corner: "16px round", cornerShape: "bevel" });
+      export const side = css({ cornerTop: "8px bevel", borderTopRadius: "4px" });
+      export const sideRadius = css({ borderRadius: 8, borderTopRadius: 4 });
+      export const corner = css({ borderTopLeftRadius: 2 });
+      export const clip = css({ borderBlockClip: "none", borderTopClip: "10px" });
+    `,
+    "atomic-corner-nesting.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  const specificity = (name: string, declaration: string) =>
+    readSpecificityOf(
+      cssText,
+      readExportedClassName(result.code, name),
+      declaration,
+    );
+
+  assert.equal(specificity("radius", "corner:16px round;"), 1);
+  assert.equal(specificity("radius", "border-radius:8px;"), 2);
+  assert.equal(specificity("shape", "corner-shape:bevel;"), 2);
+  assert.equal(specificity("side", "corner-top:8px bevel;"), 2);
+  assert.equal(specificity("side", "border-top-radius:4px;"), 3);
+  assert.equal(specificity("sideRadius", "border-top-radius:4px;"), 3);
+  assert.equal(specificity("corner", "border-top-left-radius:2px;"), 4);
+  assert.ok(
+    specificity("clip", "border-top-clip:10px;") >
+      specificity("clip", "border-block-clip:none;"),
+  );
+
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: "8px", corner: "16px round" });`,
+    "atomic-errors/corner-after-radius.ts",
+    /"border-radius: 8px".*"corner: 16px round".*a longhand wins over its shorthand.*reorder the declarations/su,
+  );
+  // Neither sets all the other sets: border-radius sets no shape, corner-top
+  // only two corners.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: 8, cornerTop: "4px bevel" });`,
+    "atomic-errors/radius-and-corner-side.ts",
+    /the atomic model has no rule that orders these two declarations.*"border-radius" and "corner-top" have no order rule/su,
+  );
+  // A physical side is nested in a flow-relative shorthand that sets it in some
+  // writing mode.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopClip: "10px", borderBlockClip: "none" });`,
+    "atomic-errors/clip-side-first.ts",
+    /"border-top-clip: 10px".*"border-block-clip: none".*a longhand wins over its shorthand.*reorder the declarations/su,
   );
 }
 
@@ -5983,7 +6090,7 @@ async function testAtomicAllowedOrders() {
       export const gridThenGap = css({ grid: "auto / 1fr", rowGap: 8 });
       export const markers = css({ marker: "none", markerStart: "url(#arrow)" });
       export const hostWins = css({
-        ":host(.a.b.c.d.e.f.g.h) &": { color: "red" },
+        ":host(.a.b.c.d.e.f.g.h.i) &": { color: "red" },
         "&:hover": { color: "blue" },
       });
       export const hostLoses = css({ ":host &": { color: "red" }, "&:hover": { color: "blue" } });
@@ -6835,6 +6942,7 @@ async function main() {
   await testAtomicOrderErrors();
   await testAtomicPhysicalAndFlowRelativeHint();
   await testAtomicFlowRelativeCornersMeetPhysicalOnes();
+  await testAtomicCornerShorthandsNest();
   await testAtomicAllowedOrders();
   await testAtomicSelectorsReadClassesAsTokens();
   await testAtomicFallbackArrayIsOneAtom();

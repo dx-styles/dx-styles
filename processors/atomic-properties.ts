@@ -18,9 +18,11 @@
  * Borders 4), and follows the specifications where mdn-data lags: `grid` does
  * not reset the gaps (CSS Grid 2, §7.8). It also links the flow-relative box
  * shorthands (`padding-inline`, ...) to the physical box shorthand of their
- * family, the side shorthands (`border-top`, ...) to `border`, and the side
+ * family, the side shorthands (`border-top`, ...) to `border`, the side
  * shorthands of the corners (`border-top-radius`, `corner-block-start-shape`)
- * to `border-radius` and `corner-shape`. A shorthand also lists the properties it resets but cannot set
+ * to `border-radius` and `corner-shape`, and `border-radius` and `corner-shape`
+ * to `corner` (CSS Borders 4, §3.9.3). A shorthand also lists the properties it
+ * resets but cannot set
  * (its reset-only sub-properties): `border` resets `border-image` (CSS
  * Cascade 5, §3), `font` resets `font-kerning` and the other "reset
  * implicitly" properties (CSS Fonts 4, §2.7), `mask` resets `mask-border`, and
@@ -34,7 +36,7 @@ const BASE36_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz";
 // the hashed code of a property outside the table.
 const TABLE_CODE_CAPACITY = 35 * 36;
 
-export type LonghandDepth = 0 | 1 | 2;
+export type LonghandDepth = 0 | 1 | 2 | 3;
 
 // prettier-ignore
 export const PROPERTY_CODE_TABLE: readonly string[] = [
@@ -264,7 +266,9 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "columns": ["column-width", "column-count", "column-height"],
   "contain-intrinsic-size": ["contain-intrinsic-width", "contain-intrinsic-height"],
   "container": ["container-name", "container-type"],
-  "corner": [...CORNERS, ...SIDES].map((place) => `corner-${place}`),
+  "corner": [
+    "border-radius", "corner-shape", ...[...CORNERS, ...SIDES].map((place) => `corner-${place}`),
+  ],
   ...cornerShorthands(),
   "corner-shape": [
     "corner-top-left-shape", "corner-top-right-shape", "corner-bottom-right-shape",
@@ -396,13 +400,6 @@ const propertyCodes = new Map(
   ]),
 );
 
-const shorthandParents = new Map<string, string[]>();
-Object.entries(SHORTHAND_SUBPROPERTIES).forEach(([shorthand, subProperties]) => {
-  subProperties.forEach((subProperty) => {
-    shorthandParents.set(subProperty, [...(shorthandParents.get(subProperty) ?? []), shorthand]);
-  });
-});
-
 /** The table code of a property, or null when the property is outside the table. */
 export function readPropertyCode(property: string): null | string {
   return propertyCodes.get(property) ?? null;
@@ -425,20 +422,55 @@ function resolveProperty(property: string): string {
   return Object.hasOwn(PROPERTY_ALIASES, standard) ? PROPERTY_ALIASES[standard] : standard;
 }
 
+const levels = new Map<string, LonghandDepth>();
+
 /**
- * 0 for a shorthand or a property outside any family, 1 for a shorthand that is
- * part of another shorthand (`border-top`, `border-color`), 2 for a longhand of
- * a family (`border-top-color`, `padding-top`). An alias or a vendor-prefixed
- * property has the depth of the property it sets.
+ * Whether a property is nested in a shorthand: in every writing mode the
+ * shorthand sets every longhand the property sets, and the property does not
+ * set every longhand of the shorthand (`border-top-color` in `border-top`,
+ * `corner-top-left` in `corner-top`); or the property is a physical longhand
+ * and the shorthand a flow-relative one that sets it in some writing mode
+ * (`margin-top` in `margin-inline`). Both names are resolved.
+ */
+function isNestedIn(property: string, shorthand: string): boolean {
+  const propertyModes = collectAffectedLonghands(property);
+  const shorthandModes = collectAffectedLonghands(shorthand);
+
+  if (setsEveryLonghandOf(shorthandModes, propertyModes)) {
+    return !setsEveryLonghandOf(propertyModes, shorthandModes);
+  }
+
+  return (
+    !Object.hasOwn(SHORTHAND_SUBPROPERTIES, property) &&
+    !isFlowRelative(property) &&
+    isFlowRelative(shorthand) &&
+    shorthandModes.some((longhands) => longhands.has(property))
+  );
+}
+
+/**
+ * The level of a property in the tree of shorthands: 0 for a property nested
+ * in no shorthand, otherwise one more than the highest level of the shorthands
+ * it is nested in (`margin` 0, `margin-inline` 1, `margin-top` 2;
+ * `border-top-color` 3). An alias or a vendor-prefixed property has the level
+ * of the property it sets.
  */
 export function readLonghandDepth(property: string): LonghandDepth {
   const resolved = resolveProperty(property);
-
-  if (!shorthandParents.has(resolved)) {
-    return 0;
+  const cached = levels.get(resolved);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  return Object.hasOwn(SHORTHAND_SUBPROPERTIES, resolved) ? 1 : 2;
+  const level = Object.keys(SHORTHAND_SUBPROPERTIES).reduce<number>(
+    (highest, shorthand) =>
+      shorthand !== resolved && isNestedIn(resolved, shorthand)
+        ? Math.max(highest, readLonghandDepth(shorthand) + 1)
+        : highest,
+    0,
+  ) as LonghandDepth;
+  levels.set(resolved, level);
+  return level;
 }
 
 function collectLonghands(property: string, into: Set<string>): Set<string> {
@@ -581,28 +613,6 @@ function setsEveryLonghandOf(
 ): boolean {
   return outer.every((longhands, mode) =>
     [...inner[mode]].every((longhand) => longhands.has(longhand)),
-  );
-}
-
-/**
- * Whether a physical and a flow-relative property set a common longhand in
- * some writing mode, while neither of them sets every longhand of the other
- * in every writing mode (`margin-top` and `margin-inline`, `margin-top` and
- * `margin-inline-start`). Which of the two is the longhand of the other then
- * depends on the writing mode, which is not known at build time.
- * `padding` and `padding-inline-start` do not: `padding` sets every side.
- */
-export function overlapDependsOnWritingMode(left: string, right: string): boolean {
-  if (left === "all" || right === "all" || isFlowRelative(left) === isFlowRelative(right)) {
-    return false;
-  }
-
-  const leftModes = collectAffectedLonghands(left);
-  const rightModes = collectAffectedLonghands(right);
-  return (
-    propertiesOverlap(left, right) &&
-    !setsEveryLonghandOf(leftModes, rightModes) &&
-    !setsEveryLonghandOf(rightModes, leftModes)
   );
 }
 
