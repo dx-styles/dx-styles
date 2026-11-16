@@ -112,6 +112,20 @@ flow-relative property (`padding-left` and `padding-inline-start`, `width` and `
 not reset by `all`), or two `@media` conditions that overlap. They fail the build, unless both
 set one property to one value: then either wins with the same result.
 
+A fallback array (`width: ["100px", "50vw"]`) becomes one atom, but each of its values stays a
+declaration of its own, with its own `!important`, and a browser may drop any of them. So the
+check compares every value of one array with every value of the other, unless both arrays are the
+same:
+
+```ts
+// error: with :active and :hover at once the semantic model applies the later
+// important 20px, the atomic model the important 10px of :active
+css({
+  "&:active": { width: ["10px !important", "20px"] },
+  "&:hover": { width: ["10px", "20px !important"] },
+});
+```
+
 The writing mode is not known at build time. In a vertical one the block axis is horizontal, so a
 flow-relative side, size or corner can be any physical one: `padding-inline-start` overlaps
 `padding-top` as well as `padding-left`. Two flow-relative properties are compared in one writing

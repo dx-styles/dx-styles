@@ -5618,6 +5618,17 @@ async function testAtomicOrderErrors() {
     "atomic-errors/attribute-case.ts",
     /"color: red" under "&\[type="text"\]".*"color: blue".*no order rule/su,
   );
+  // Each value of a fallback array keeps its own !important: with :active and
+  // :hover at once the semantic model applies the later important 20px, the
+  // atomic model the important 10px of the higher pseudo-class rank.
+  await assertAtomicBuildFails(
+    `export const sized = css({
+      "&:active": { width: ["10px !important", "20px"] },
+      "&:hover": { width: ["10px", "20px !important"] },
+    });`,
+    "atomic-errors/fallback-important.ts",
+    /"width: 10px !important" under "&:active".*"width: 20px !important" under "&:hover".*The semantic model applies "&:hover".*pseudo-class rank decides.*it would apply "&:active"/su,
+  );
   await assertAtomicBuildFails(
     `export const layered = css({ "@layer base": { color: "red" } });`,
     "atomic-errors/layer.ts",
@@ -5812,6 +5823,21 @@ async function testAtomicFallbackArrayIsOneAtom() {
   assert.deepEqual(readRulesOf(result.cssText ?? "", readAtoms(sized)[0]), [
     `.${readAtoms(sized)[0]}{width:100px;width:50vw;}`,
   ]);
+
+  // In this order both models apply the important value of :active, or of
+  // :hover when only one of them matches: the build goes through.
+  const ordered = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+      export const sized = css({
+        "&:hover": { width: ["10px", "20px !important"] },
+        "&:active": { width: ["10px !important", "20px"] },
+      });
+    `,
+    "atomic-fallbacks-important.ts",
+    { output: "atomic" },
+  );
+  assert.equal(readAtoms(readExportedClassName(ordered.code, "sized")).length, 2);
 }
 
 async function testAtomicRelativeUrlsDependOnTheBuildRoot() {

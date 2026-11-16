@@ -513,18 +513,20 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
       selectorText === "&" && group.atRules.length === 0
         ? declarationText
         : wrapInAtRules(group.atRules, `${selectorText}{${declarationText}}`);
-    const value = values.map((entry) => entry.replace(IMPORTANT_PATTERN, "").trim()).join(", ");
-    const important = values.some((entry) => IMPORTANT_PATTERN.test(entry));
+    // Each value of a fallback array is a declaration of its own in the cascade.
+    const cascadeValues = values.map((entry) => ({
+      important: IMPORTANT_PATTERN.test(entry),
+      value: entry.replace(IMPORTANT_PATTERN, "").trim(),
+    }));
     const atomDeclarations = relativeSelectors.map((selector, index) => ({
       atRules: group.atRules,
       atomicSpecificity: readSelectorSpecificity(selector, [0, repeatCounts[index], 0]),
-      important,
       key,
       properties,
       property: group.property,
       selector,
       semanticSpecificity: readSelectorSpecificity(selector, [0, 1, 0]),
-      value,
+      values: cascadeValues,
     }));
 
     registerAtom(name, { body: cssText, declarations: atomDeclarations }, input.place);

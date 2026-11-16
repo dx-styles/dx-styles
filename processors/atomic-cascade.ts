@@ -20,12 +20,17 @@ import {
 
 export type Specificity = readonly [number, number, number];
 
+/** One value of a declaration with its own priority. */
+export interface CascadeValue {
+  readonly important: boolean;
+  readonly value: string;
+}
+
 /** One declaration of a style, as the order check sees it. */
 export interface CascadeDeclaration {
   /** At-rule preludes around the declaration, outermost first (`@media (…)`). */
   readonly atRules: readonly string[];
   readonly atomicSpecificity: Specificity;
-  readonly important: boolean;
   /** The atom key: the property and the condition. */
   readonly key: string;
   /** The properties the atom emits after the vendor prefixer, the property itself included. */
@@ -34,8 +39,15 @@ export interface CascadeDeclaration {
   /** One complex selector relative to the styled element, which is `&`. */
   readonly selector: string;
   readonly semanticSpecificity: Specificity;
-  readonly value: string;
+  /**
+   * The values in the order of the CSS: one, or the values of a fallback array,
+   * each of them a declaration of its own in the cascade.
+   */
+  readonly values: readonly CascadeValue[];
 }
+
+/** One value of a declaration, the unit the cascade weighs. */
+type WeighedDeclaration = Omit<CascadeDeclaration, "values"> & CascadeValue;
 
 /** A group of declarations that reaches an element through one class string. */
 export interface CascadePart {
@@ -576,8 +588,8 @@ export function areConditionsIncompatible(
 }
 
 function compareWeight(
-  left: CascadeDeclaration,
-  right: CascadeDeclaration,
+  left: WeighedDeclaration,
+  right: WeighedDeclaration,
   specificity: "atomicSpecificity" | "semanticSpecificity",
 ): number {
   return (
@@ -586,12 +598,13 @@ function compareWeight(
   );
 }
 
-function describeCondition(declaration: CascadeDeclaration): string {
+function describeCondition(declaration: Pick<CascadeDeclaration, "atRules" | "selector">): string {
   return [...declaration.atRules, declaration.selector].join(" ");
 }
 
-function describeDeclaration(part: CascadePart, declaration: CascadeDeclaration): string {
-  return `${part.place} sets "${declaration.property}: ${declaration.value}" under "${describeCondition(declaration)}"`;
+function describeDeclaration(part: CascadePart, declaration: WeighedDeclaration): string {
+  const value = `${declaration.value}${declaration.important ? " !important" : ""}`;
+  return `${part.place} sets "${declaration.property}: ${value}" under "${describeCondition(declaration)}"`;
 }
 
 interface DeclarationFacts {
@@ -600,7 +613,7 @@ interface DeclarationFacts {
   readonly rank: number;
 }
 
-function readFacts(declaration: CascadeDeclaration): DeclarationFacts {
+function readFacts(declaration: WeighedDeclaration): DeclarationFacts {
   return {
     depth: readLonghandDepth(declaration.property),
     inAtRule: declaration.atRules.some(isConditionalAtRule),
@@ -608,7 +621,7 @@ function readFacts(declaration: CascadeDeclaration): DeclarationFacts {
   };
 }
 
-function describeAtomicRule(winner: CascadeDeclaration, loser: CascadeDeclaration): string {
+function describeAtomicRule(winner: WeighedDeclaration, loser: WeighedDeclaration): string {
   const winnerFacts = readFacts(winner);
   const loserFacts = readFacts(loser);
 
@@ -631,7 +644,7 @@ function describeAtomicRule(winner: CascadeDeclaration, loser: CascadeDeclaratio
   return "the remaining selector specificity decides";
 }
 
-function describeTieHint(earlier: CascadeDeclaration, later: CascadeDeclaration): string {
+function describeTieHint(earlier: WeighedDeclaration, later: WeighedDeclaration): string {
   const earlierMedia = earlier.atRules.filter((atRule) => /^@media/iu.test(atRule)).join(" ");
   const laterMedia = later.atRules.filter((atRule) => /^@media/iu.test(atRule)).join(" ");
 
@@ -647,8 +660,8 @@ function describeTieHint(earlier: CascadeDeclaration, later: CascadeDeclaration)
 }
 
 function describeContradictionHint(
-  semanticWinner: CascadeDeclaration,
-  atomicWinner: CascadeDeclaration,
+  semanticWinner: WeighedDeclaration,
+  atomicWinner: WeighedDeclaration,
   semanticWinnerPart: CascadePart,
   atomicWinnerPart: CascadePart,
 ): string {
@@ -672,22 +685,63 @@ function describeContradictionHint(
   return `reorder the declarations so that the order agrees with the rule: put "${describeCondition(semanticWinner)}" (${semanticWinner.property}) before "${describeCondition(atomicWinner)}" (${atomicWinner.property}), or set the property in one declaration`;
 }
 
-interface PlacedDeclaration {
-  readonly declaration: CascadeDeclaration;
+interface Placed<T> {
+  readonly declaration: T;
   readonly part: number;
+}
+
+function haveSameValues(left: CascadeDeclaration, right: CascadeDeclaration): boolean {
+  return (
+    left.values.length === right.values.length &&
+    left.values.every(
+      ({ important, value }, index) =>
+        value === right.values[index].value && important === right.values[index].important,
+    )
+  );
+}
+
+/** Compares the winners of both models for two values that meet on one element. */
+function checkValuePair(
+  file: string,
+  parts: readonly CascadePart[],
+  earlier: Placed<WeighedDeclaration>,
+  later: Placed<WeighedDeclaration>,
+): void {
+  const x = earlier.declaration;
+  const y = later.declaration;
+  const semanticWinner = compareWeight(x, y, "semanticSpecificity") > 0 ? earlier : later;
+  // Of two atoms with one key, the class string keeps the later one.
+  const atomicOrder = x.key === y.key ? -1 : compareWeight(x, y, "atomicSpecificity");
+
+  if (atomicOrder === 0) {
+    throw new Error(
+      `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies "${describeCondition(semanticWinner.declaration)}" (${semanticWinner.declaration.property}), but the atomic model has no rule that orders these two declarations. To fix it, ${describeTieHint(x, y)}.`,
+    );
+  }
+
+  const atomicWinner = atomicOrder > 0 ? earlier : later;
+  if (atomicWinner !== semanticWinner) {
+    const atomicLoser = atomicWinner === earlier ? later : earlier;
+    throw new Error(
+      `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies "${describeCondition(semanticWinner.declaration)}", but in the atomic model ${describeAtomicRule(atomicWinner.declaration, atomicLoser.declaration)}, so it would apply "${describeCondition(atomicWinner.declaration)}". To fix it, ${describeContradictionHint(semanticWinner.declaration, atomicWinner.declaration, parts[semanticWinner.part], parts[atomicWinner.part])}.`,
+    );
+  }
 }
 
 /**
  * Checks every pair of declarations that can meet on one element. Parts are in
  * class-string order; `canMeet` says whether two parts can be on one element.
- * Throws with the place, the property, both conditions, the rule and a hint.
+ * Each value of a fallback array is weighed with its own `!important`: the
+ * winners agree for every set of values a browser accepts only when they agree
+ * for every pair of values. Throws with the place, the property, both
+ * conditions, the rule and a hint.
  */
 export function checkAtomicCascade(
   file: string,
   parts: readonly CascadePart[],
   canMeet: (left: number, right: number) => boolean = () => true,
 ): void {
-  const placed: PlacedDeclaration[] = parts.flatMap((part, index) =>
+  const placed: Placed<CascadeDeclaration>[] = parts.flatMap((part, index) =>
     part.declarations.map((declaration) => ({ declaration, part: index })),
   );
 
@@ -702,28 +756,30 @@ export function checkAtomicCascade(
         (earlier.part === later.part && !parts[earlier.part].checkWithin) ||
         (earlier.part !== later.part && !canMeet(earlier.part, later.part)) ||
         !x.properties.some((left) => y.properties.some((right) => propertiesOverlap(left, right))) ||
-        // One property with one value gives one result whichever declaration wins.
-        (x.property === y.property && x.value === y.value && x.important === y.important) ||
+        // One property with the same values gives one result whichever declaration wins.
+        (x.property === y.property && haveSameValues(x, y)) ||
         areConditionsIncompatible(x, y)
       ) {
         continue;
       }
 
-      const semanticWinner = compareWeight(x, y, "semanticSpecificity") > 0 ? earlier : later;
-      const atomicOrder = x.key === y.key ? -1 : compareWeight(x, y, "atomicSpecificity");
+      for (const xValue of x.values) {
+        for (const yValue of y.values) {
+          if (
+            x.property === y.property &&
+            xValue.value === yValue.value &&
+            xValue.important === yValue.important
+          ) {
+            continue;
+          }
 
-      if (atomicOrder === 0) {
-        throw new Error(
-          `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies "${describeCondition(semanticWinner.declaration)}" (${semanticWinner.declaration.property}), but the atomic model has no rule that orders these two declarations. To fix it, ${describeTieHint(x, y)}.`,
-        );
-      }
-
-      const atomicWinner = atomicOrder > 0 ? earlier : later;
-      if (atomicWinner !== semanticWinner) {
-        const atomicLoser = atomicWinner === earlier ? later : earlier;
-        throw new Error(
-          `dx-styles atomic output: ${file}: ${describeDeclaration(parts[earlier.part], x)}, and ${describeDeclaration(parts[later.part], y)}. The semantic model applies "${describeCondition(semanticWinner.declaration)}", but in the atomic model ${describeAtomicRule(atomicWinner.declaration, atomicLoser.declaration)}, so it would apply "${describeCondition(atomicWinner.declaration)}". To fix it, ${describeContradictionHint(semanticWinner.declaration, atomicWinner.declaration, parts[semanticWinner.part], parts[atomicWinner.part])}.`,
-        );
+          checkValuePair(
+            file,
+            parts,
+            { declaration: { ...x, ...xValue }, part: earlier.part },
+            { declaration: { ...y, ...yValue }, part: later.part },
+          );
+        }
       }
     }
   }
