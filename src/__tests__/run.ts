@@ -5814,6 +5814,27 @@ async function testAtomicPhysicalAndFlowRelativeHint() {
     "margin-top:8px;",
   ].forEach((declaration) => assert.ok(orderedCss.includes(declaration), orderedCss));
 
+  // Under :where(&) both atoms have no specificity, so nothing orders the pair;
+  // a plain & next to :where(&) is more specific in both models.
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ ":where(&)": { marginTop: 8, marginInline: 4 } });`,
+    "atomic-errors/physical-margin-inline-where.ts",
+    /"margin-top" is physical and "margin-inline" flow-relative/su,
+  );
+  const outsideWhere = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const toolbar = css({ marginTop: 8, ":where(&)": { marginInline: 4 } });
+    `,
+    "atomic-physical-where.ts",
+    { output: "atomic" },
+  );
+  const outsideWhereCss = outsideWhere.cssText ?? "";
+  ["margin-top:8px;", "margin-inline:4px;"].forEach((declaration) =>
+    assert.ok(outsideWhereCss.includes(declaration), outsideWhereCss),
+  );
+
   // The rewrites the hints name build.
   const result = await runWywTransform(
     `

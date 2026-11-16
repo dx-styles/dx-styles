@@ -768,12 +768,20 @@ function haveSameValues(left: CascadeDeclaration, right: CascadeDeclaration): bo
   );
 }
 
-/** The declaration with the classes its longhand depth adds to its atom taken away. */
+/**
+ * The declaration as if its atom did not repeat its class for the longhand
+ * depth. The specificity is read again from the selector, so a repeat that
+ * adds nothing, as under `:where(&)`, is not taken away.
+ */
 function withoutDepth(declaration: WeighedDeclaration): WeighedDeclaration {
-  const [ids, classes, types] = declaration.atomicSpecificity;
+  const { atRules, property, selector } = declaration;
+  const repeatCount =
+    readAtomRepeatCount(property, atRules, selector) -
+    readLonghandDepth(property);
+  const ampSpecificity: Specificity = [0, repeatCount, 0];
   return {
     ...declaration,
-    atomicSpecificity: [ids, classes - readLonghandDepth(declaration.property), types],
+    atomicSpecificity: readSelectorSpecificity(selector, ampSpecificity),
   };
 }
 
