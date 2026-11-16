@@ -218,6 +218,12 @@ css({ height: 40, inlineSize: 200 }); // error
 css({ blockSize: 40, inlineSize: 200 }); // fine
 ```
 
+A shorthand does not change this: `marginInline` sets `marginTop` in a vertical writing mode and
+no side of it in a horizontal one, so `css({ marginInline: 4, marginTop: 8 })` fails too. A
+physical shorthand that sets every side or corner (`padding`, `inset`, `borderRadius`) sets every
+flow-relative one in any writing mode, so the longhand rule orders them as usual:
+`css({ padding: 0, paddingInlineStart: 8 })` builds.
+
 The warning `dx-styles/physical-direction-property` suggests a flow-relative property only for
 the inline sides (`paddingLeft` to `paddingInlineStart`, `left` to `insetInlineStart`). In the
 atomic model a style that follows it and also sets a block side has to move that side too:

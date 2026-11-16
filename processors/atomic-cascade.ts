@@ -10,6 +10,7 @@
  */
 import {
   isFlowRelative,
+  overlapDependsOnWritingMode,
   propertiesOverlap,
   readFlowRelativeCounterpart,
   readLonghandDepth,
@@ -767,6 +768,15 @@ function haveSameValues(left: CascadeDeclaration, right: CascadeDeclaration): bo
   );
 }
 
+/** The declaration with the classes its longhand depth adds to its atom taken away. */
+function withoutDepth(declaration: WeighedDeclaration): WeighedDeclaration {
+  const [ids, classes, types] = declaration.atomicSpecificity;
+  return {
+    ...declaration,
+    atomicSpecificity: [ids, classes - readLonghandDepth(declaration.property), types],
+  };
+}
+
 /** Compares the winners of both models for two values that meet on one element. */
 function checkValuePair(
   file: string,
@@ -777,8 +787,18 @@ function checkValuePair(
   const x = earlier.declaration;
   const y = later.declaration;
   const semanticWinner = compareWeight(x, y, "semanticSpecificity") > 0 ? earlier : later;
-  // Of two atoms with one key, the class string keeps the later one.
-  const atomicOrder = x.key === y.key ? -1 : compareWeight(x, y, "atomicSpecificity");
+  // Of two atoms with one key, the class string keeps the later one. The depth
+  // of a longhand orders nothing between properties whose overlap depends on
+  // the writing mode: under one condition they have no order rule.
+  const writingModeDependent = x.properties.some((left) =>
+    y.properties.some((right) => overlapDependsOnWritingMode(left, right)),
+  );
+  const atomicOrder =
+    x.key === y.key
+      ? -1
+      : writingModeDependent
+        ? compareWeight(withoutDepth(x), withoutDepth(y), "atomicSpecificity")
+        : compareWeight(x, y, "atomicSpecificity");
 
   if (atomicOrder === 0) {
     throw new Error(

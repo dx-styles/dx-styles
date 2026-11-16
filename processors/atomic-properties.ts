@@ -575,6 +575,37 @@ export function propertiesOverlap(left: string, right: string): boolean {
   );
 }
 
+function setsEveryLonghandOf(
+  outer: readonly Set<string>[],
+  inner: readonly Set<string>[],
+): boolean {
+  return outer.every((longhands, mode) =>
+    [...inner[mode]].every((longhand) => longhands.has(longhand)),
+  );
+}
+
+/**
+ * Whether a physical and a flow-relative property set a common longhand in
+ * some writing mode, while neither of them sets every longhand of the other
+ * in every writing mode (`margin-top` and `margin-inline`, `margin-top` and
+ * `margin-inline-start`). Which of the two is the longhand of the other then
+ * depends on the writing mode, which is not known at build time.
+ * `padding` and `padding-inline-start` do not: `padding` sets every side.
+ */
+export function overlapDependsOnWritingMode(left: string, right: string): boolean {
+  if (left === "all" || right === "all" || isFlowRelative(left) === isFlowRelative(right)) {
+    return false;
+  }
+
+  const leftModes = collectAffectedLonghands(left);
+  const rightModes = collectAffectedLonghands(right);
+  return (
+    propertiesOverlap(left, right) &&
+    !setsEveryLonghandOf(leftModes, rightModes) &&
+    !setsEveryLonghandOf(rightModes, leftModes)
+  );
+}
+
 /** Whether the physical longhands a property sets depend on the writing mode. */
 export function isFlowRelative(property: string): boolean {
   const [first, ...rest] = collectAffectedLonghands(property);

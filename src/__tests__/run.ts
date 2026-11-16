@@ -5767,6 +5767,53 @@ async function testAtomicPhysicalAndFlowRelativeHint() {
     ),
   );
 
+  // A flow-relative shorthand next to a physical longhand: the longhand is deeper,
+  // but in horizontal-tb they set no common side, so depth orders nothing.
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ marginInline: 4, marginTop: 8 });`,
+    "atomic-errors/physical-margin-inline.ts",
+    new RegExp(
+      `"margin-top" is physical and "margin-inline" flow-relative, and ${reason}: write both in one system, "margin-block-start" instead of "margin-top"`,
+      "su",
+    ),
+  );
+  await assertAtomicBuildFails(
+    `export const toolbar = css({ paddingInline: 4, paddingTop: 8 });`,
+    "atomic-errors/physical-padding-inline.ts",
+    /"padding-top" is physical and "padding-inline" flow-relative/su,
+  );
+  await assertAtomicBuildFails(
+    `export const frame = css({ borderInline: "1px solid red", borderTopColor: "blue" });`,
+    "atomic-errors/physical-border-inline.ts",
+    /"border-top-color" is physical and "border-inline" flow-relative.*"border-block-start-color" instead of "border-top-color"/su,
+  );
+
+  // A physical shorthand that sets every side or corner contains the
+  // flow-relative property in every writing mode, so the longhand wins there
+  // in both models; a pseudo-class rank or an at-rule orders a pair the same
+  // way in every writing mode.
+  const ordered = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const box = css({ padding: 0, paddingInlineStart: 8 });
+      export const anchored = css({ inset: 0, insetInline: 4 });
+      export const rounded = css({ borderRadius: 16, borderStartStartRadius: 4 });
+      export const hovered = css({ marginInline: 4, "&:hover": { marginTop: 8 } });
+      export const wide = css({ marginInline: 4, "@media (width >= 40rem)": { marginTop: 8 } });
+    `,
+    "atomic-physical-ordered.ts",
+    { output: "atomic" },
+  );
+  const orderedCss = ordered.cssText ?? "";
+  [
+    "padding-inline-start:8px;",
+    "inset-inline:4px;",
+    "border-start-start-radius:4px;",
+    "margin-inline:4px;",
+    "margin-top:8px;",
+  ].forEach((declaration) => assert.ok(orderedCss.includes(declaration), orderedCss));
+
   // The rewrites the hints name build.
   const result = await runWywTransform(
     `
@@ -5810,11 +5857,12 @@ async function testAtomicFlowRelativeCornersMeetPhysicalOnes() {
     "atomic-errors/physical-corner-shape.ts",
     /"corner-top-left-shape" is physical and "corner-start-start-shape" flow-relative.*"corner-start-start-shape" instead of "corner-top-left-shape", or "corner-top-left-shape" instead of "corner-start-start-shape"/su,
   );
-  // The side radius shorthands (§3.6.1) set two corners each.
+  // The side radius shorthands (§3.6.1) set two corners each: the top-left one
+  // in horizontal-tb ltr, and no top-left corner in vertical-rl.
   await assertAtomicBuildFails(
     `export const card = css({ borderTopLeftRadius: "4px", borderBlockStartRadius: "8px" });`,
     "atomic-errors/logical-side-radius.ts",
-    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*a longhand wins over its shorthand/su,
+    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*"border-top-left-radius" is physical and "border-block-start-radius" flow-relative/su,
   );
   // The corner shorthands (§3.9) set the shape and the radius of their corners.
   await assertAtomicBuildFails(
