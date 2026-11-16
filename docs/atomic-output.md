@@ -23,7 +23,11 @@ wyw({
 ```
 
 `output` accepts `"semantic"` (the default) and `"atomic"`. Without the option, or with
-`output: "semantic"`, the output is byte for byte what it was before the option existed.
+`output: "semantic"`, the CSS and the class names are byte for byte what they were before the
+option existed. The runtime does grow: `cx`, which recipes and style handles use too, now
+recognizes atoms in any model
+(see [`cx` and the atom name contract](#cx-and-the-atom-name-contract)), so the JavaScript of an
+application that imports dx-styles gets slightly larger.
 
 ## What changes and what does not
 
@@ -369,13 +373,20 @@ work:
 
 Repeated atoms inside one module collapse in WyW, which keys the rules of a module by selector.
 Between modules the CSS minifier of the bundler removes them. Measured on two modules that emit
-the same atoms, one inside `@media`:
+the same atoms, one inside `@media`, and for esbuild and lightningcss also on the production build
+of an application with one CSS file:
 
 | Minifier            | Repeated top-level atom | Repeated atom inside `@media` |
 | ------------------- | ----------------------- | ----------------------------- |
-| esbuild 0.28.2      | removed                 | removed                       |
+| esbuild 0.28.2      | nearly all removed      | removed                       |
 | cssnano 9.9.0       | removed                 | removed                       |
-| lightningcss 1.33.0 | removed                 | **kept**                      |
+| lightningcss 1.33.0 | nearly all removed      | **kept**                      |
+
+In the application esbuild and lightningcss left a few top-level atoms in more than one rule.
+Both merge adjacent rules with the same body into one rule with a selector list
+(`.A:hover,.B{…}`); when a separate rule of one of those atoms (`.A:hover{…}`) stays later in
+the file, it is no longer an exact repeat, and both rules stay. The cascade does not change,
+because both rules set the same declaration; only the CSS is a little larger.
 
 So:
 
