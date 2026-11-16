@@ -31,8 +31,8 @@ The `dxStyles` options are:
   hashes, and drop the style label of the atomic output.
 - `output` (default `"semantic"`): the output model. `output: "atomic"` emits one shared class per
   declaration instead of one class per style, and fails the build when a style's result would
-  depend on declaration order. It needs WyW's stylis preprocessor (the `preprocessor` option unset
-  or `"stylis"`). See [Atomic output](./atomic-output.md).
+  depend on declaration order. It is tested with WyW's stylis preprocessor (the `preprocessor`
+  option unset or `"stylis"`). See [Atomic output](./atomic-output.md).
 
 The public entrypoints are:
 

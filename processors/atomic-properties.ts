@@ -361,9 +361,15 @@ const VENDOR_PREFIX_PATTERN = /^-(?:webkit|moz|ms|o)-/u;
 
 /**
  * The standard name of a property. A vendor-prefixed property counts as the
- * property it prefixes: browsers treat many of them as its alias.
+ * property it prefixes: browsers treat many of them as its alias. The -ms-grid
+ * properties of IE 10 and 11 follow an older grid model and alias none
+ * (-ms-grid-row is a start line, not grid-row), so each counts as itself.
  */
 function resolveProperty(property: string): string {
+  if (property.startsWith("-ms-grid")) {
+    return property;
+  }
+
   const standard = property.replace(VENDOR_PREFIX_PATTERN, "");
   return Object.hasOwn(PROPERTY_ALIASES, standard) ? PROPERTY_ALIASES[standard] : standard;
 }

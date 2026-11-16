@@ -1048,25 +1048,6 @@ export function readOutputModel(options: unknown): DxStylesOutputModel {
 }
 
 /**
- * The order check of the atomic output compares atoms with the layout stylis
- * gives, so the WyW preprocessor that expands the atoms must be stylis too.
- * WyW passes all plugin options to processors, `preprocessor` included, though
- * its `IOptions` type does not declare it.
- */
-export function assertAtomicPreprocessor(options: unknown): void {
-  const preprocessor = isPlainObject(options) ? options.preprocessor : undefined;
-
-  if (preprocessor === undefined || preprocessor === "stylis") {
-    return;
-  }
-
-  const described = typeof preprocessor === "function" ? "a function" : JSON.stringify(preprocessor);
-  throw new Error(
-    `dx-styles output: "atomic" requires the stylis preprocessor of WyW, but the WyW option preprocessor is ${described}. Remove the preprocessor option, or build with output: "semantic".`,
-  );
-}
-
-/**
  * `cx` treats any class name of the atom shape as an atom in either model, so a
  * class name that the WyW option `classNameSlug` turns into that shape would be
  * dropped against real atoms.

@@ -277,11 +277,8 @@ function readDeclaration(name: string, value: string): readonly [string, string]
 
 interface DeclarationGroup {
   readonly atRules: readonly string[];
-  /** The declarations of the group as stylis parsed them, and all declarations of their rule. */
-  readonly elements: Element[];
   readonly property: string;
   readonly selectors: readonly string[];
-  readonly siblings: readonly Element[];
   readonly values: string[];
 }
 
@@ -344,17 +341,14 @@ function collectDeclarationGroups(
         const [property, value] = readDeclaration(String(child.props), child.children);
 
         if (current?.property === property) {
-          current.elements.push(child);
           current.values.push(value);
           return;
         }
 
         current = {
           atRules,
-          elements: [child],
           property,
           selectors,
-          siblings: element.children as Element[],
           values: [value],
         };
         groups.push(current);
@@ -471,31 +465,11 @@ function prefixAll(elements: readonly Element[], siblings: readonly Element[]): 
 
 /**
  * The properties that the WyW preprocessor emits for an atom once the stylis
- * prefixer has run. Fails when the semantic model prefixes the declarations
- * differently because of their neighbours in the rule, which an atom lacks.
+ * prefixer has run. Stylis prefixes grid-row-start and grid-row-end (and the
+ * grid-column pair) by each other when they share a rule; their -ms- prefixes
+ * as atoms differ from the semantic model, which only IE 10 and 11 read.
  */
-function readEmittedProperties(
-  group: DeclarationGroup,
-  declarationText: string,
-  place: string,
-): string[] {
-  const alone = prefixAll(group.elements, group.elements);
-  const inRule = prefixAll(group.elements, group.siblings);
-
-  if (alone !== inRule) {
-    const neighbours = group.siblings
-      .filter(
-        (sibling) =>
-          sibling.type === "decl" &&
-          !group.elements.includes(sibling) &&
-          prefixAll(group.elements, [...group.elements, sibling]) !== alone,
-      )
-      .map((sibling) => String(sibling.props));
-    throw new Error(
-      `dx-styles atomic output: ${place} sets "${group.property}: ${group.values.join(", ")}" next to "${neighbours.join('", "')}", and the vendor prefixes it gets there ("${inRule}") differ from those of an atom alone ("${alone}"). To fix it, set them with their shorthand (for example grid-row instead of grid-row-start and grid-row-end).`,
-    );
-  }
-
+function readEmittedProperties(declarationText: string): string[] {
   const atomElements = (compile(`a{${declarationText}}`)[0]?.children ?? []) as Element[];
   const emitted = (compile(`a{${prefixAll(atomElements, atomElements)}}`)[0]?.children ??
     []) as Element[];
@@ -545,7 +519,7 @@ export function atomizeStyle(input: AtomizeStyleInput): AtomizedStyle {
     const key = `${readPropertyKeyCode(group.property)}${readConditionKeyCode(group.atRules, relativeSelectors)}`;
     const name = `dx-${key}_${valueCode}`;
     const declarationText = values.map((value) => `${group.property}:${value};`).join("");
-    const properties = readEmittedProperties(group, declarationText, input.place);
+    const properties = readEmittedProperties(declarationText);
     const repeatCounts = relativeSelectors.map((selector) =>
       readAtomRepeatCount(group.property, group.atRules, selector),
     );

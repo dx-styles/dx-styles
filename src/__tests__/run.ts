@@ -185,7 +185,10 @@ async function runWywTransform(
     readonly evalStrategy?: "execute" | "hybrid" | "static";
     readonly eventEmitter?: EventEmitter;
     readonly output?: "atomic" | "semantic";
+    readonly prefixer?: boolean;
     readonly preprocessor?: "none" | "stylis" | ((selector: string, cssText: string) => string);
+    /** Plugin options next to the dx-styles ones, as a WyW config file gives them. */
+    readonly pluginOptions?: Record<string, unknown>;
     readonly classNameSlug?: string | ((hash: string, title: string) => string);
     readonly root?: string;
   } = {},
@@ -203,7 +206,10 @@ async function runWywTransform(
         options: {
           filename,
           root: options.root ?? process.cwd(),
+          ...(options.prefixer === undefined ? {} : { prefixer: options.prefixer }),
+          ...(options.preprocessor === undefined ? {} : { preprocessor: options.preprocessor }),
           pluginOptions: {
+            ...options.pluginOptions,
             configFile: false,
             displayName: options.displayName ?? true,
             ...(options.evalStrategy === undefined
@@ -218,7 +224,6 @@ async function runWywTransform(
                 ...(options.output === undefined ? {} : { output: options.output }),
               },
             },
-            ...(options.preprocessor === undefined ? {} : { preprocessor: options.preprocessor }),
             ...(options.classNameSlug === undefined ? {} : { classNameSlug: options.classNameSlug }),
             outputMetadata: options.outputMetadata ?? false,
             features: {
@@ -5633,16 +5638,29 @@ async function testAtomicOrderErrors() {
     ),
     /processors\.dxStyles\.output must be "semantic" or "atomic", got "atoms"/u,
   );
+}
 
-  for (const preprocessor of ["none", (selector: string, cssText: string) => `${selector}{${cssText}}`] as const) {
-    await assert.rejects(
-      runWywTransform(
-        `import { css } from "dx-styles";\nexport const plain = css({ color: "red" });`,
-        "atomic-errors/preprocessor.ts",
-        { output: "atomic", preprocessor },
-      ),
-      /output: "atomic" requires the stylis preprocessor of WyW, but the WyW option preprocessor is (?:"none"|a function)\. Remove the preprocessor option, or build with output: "semantic"/u,
-    );
+async function testAtomicBuildsWithAnyPreprocessor() {
+  // WyW passes its preprocessor option to the extractor, not to processors, so
+  // the atomic model builds whatever it is; a preprocessor key in the plugin
+  // options, where a WyW config file puts it, is not that option.
+  const source = `
+    import { css } from "dx-styles";
+    export const plain = css({ color: "red", "&:hover": { color: "blue" } });
+  `;
+  const variants: Parameters<typeof runWywTransform>[2][] = [
+    { output: "atomic", preprocessor: "none" },
+    { output: "atomic", preprocessor: (selector, cssText) => `${selector}{${cssText}}` },
+    { output: "atomic", pluginOptions: { preprocessor: "none" } },
+  ];
+
+  for (const options of variants) {
+    const result = await runWywTransform(source, "atomic-preprocessor.ts", options);
+    const atoms = readAtoms(readExportedClassName(result.code, "plain"));
+    assert.equal(atoms.length, 2);
+    for (const atom of atoms) {
+      assert.ok((result.cssText ?? "").includes(`.${atom}`), `${atom} has no rule`);
+    }
   }
 }
 
@@ -5815,13 +5833,6 @@ async function testAtomicRelativeUrlsDependOnTheBuildRoot() {
 }
 
 async function testAtomicVendorPrefixesMatchTheSemanticModel() {
-  // Stylis prefixes grid-row-start and grid-row-end by their neighbours, which
-  // an atom alone does not have.
-  await assertAtomicBuildFails(
-    `export const cell = css({ gridRowStart: 2, gridRowEnd: 4 });`,
-    "atomic-errors/grid-neighbours.ts",
-    /grid-neighbours\.ts: css\(\) "cell" sets "grid-row-start: 2" next to "grid-row-end".*vendor prefixes.*set them with their shorthand/su,
-  );
   const source = `
     import { css } from "dx-styles";
     export const cell = css({ gridRow: "2 / 4", gridColumnStart: 1 });
@@ -5831,6 +5842,33 @@ async function testAtomicVendorPrefixesMatchTheSemanticModel() {
   const declarations = (cssText: string) =>
     Array.from(cssText.matchAll(/[\w-]+:[^;{}]+;/gu), ([declaration]) => declaration).sort();
   assert.deepEqual(declarations(atomic.cssText ?? ""), declarations(semantic.cssText ?? ""));
+
+  // Stylis prefixes grid-row-start and grid-row-end by each other when they
+  // share a rule (stylis@4.4.0:src/Prefixer.js), which an atom alone does not
+  // do; the pair builds, and only the -ms-grid-row-span that IE reads differs.
+  const pair = `
+    import { css } from "dx-styles";
+    export const cell = css({ gridRowStart: 2, gridRowEnd: 4 });
+  `;
+  const semanticPair = await runWywTransform(pair, "atomic-grid-pair.ts");
+  const atomicPair = await runWywTransform(pair, "atomic-grid-pair.ts", { output: "atomic" });
+  assert.deepEqual(declarations(semanticPair.cssText ?? ""), [
+    "-ms-grid-row-span:2;",
+    "-ms-grid-row:2;",
+    "grid-row-end:4;",
+    "grid-row-start:2;",
+  ]);
+  assert.deepEqual(declarations(atomicPair.cssText ?? ""), [
+    "-ms-grid-row-span:4;",
+    "-ms-grid-row:2;",
+    "grid-row-end:4;",
+    "grid-row-start:2;",
+  ]);
+  const unprefixed = await runWywTransform(pair, "atomic-grid-pair.ts", {
+    output: "atomic",
+    prefixer: false,
+  });
+  assert.deepEqual(declarations(unprefixed.cssText ?? ""), ["grid-row-end:4;", "grid-row-start:2;"]);
 
   // The prefixer turns user-select into -webkit-user-select too.
   for (const style of [
@@ -6451,6 +6489,7 @@ async function main() {
   await testAtomicFallbackArrayIsOneAtom();
   await testAtomicRelativeUrlsDependOnTheBuildRoot();
   await testAtomicVendorPrefixesMatchTheSemanticModel();
+  await testAtomicBuildsWithAnyPreprocessor();
   await testAtomicShorthandFamilies();
   await testAtomicRecipesKeepTheLastAtomPerKey();
   await testAtomicStyleHandlesComposeByKey();

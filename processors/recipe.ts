@@ -3,7 +3,6 @@ import type { ExpressionValue } from "@wyw-in-js/shared";
 
 import { createValueNode } from "./serialization.js";
 import {
-  assertAtomicPreprocessor,
   assertNotAtomShapedClassName,
   type AtomicRecipeNode,
   BaseProcessor,
@@ -209,7 +208,6 @@ export default class RecipeProcessor extends BaseProcessor {
     config: ReturnType<typeof expectRecipeConfig>,
     localRuntimeDefinition: ReturnType<typeof createRecipeRuntimeDefinition>,
   ): void {
-    assertAtomicPreprocessor(this.options);
     const nodes: (AtomicRecipeNode & { readonly composeRefs: readonly string[] })[] = [];
 
     if (config.base !== undefined && config.base !== null && config.base !== false) {

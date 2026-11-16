@@ -4,7 +4,6 @@ import type { ExpressionValue, ICSSRule } from "@wyw-in-js/shared";
 import type { SlotRecipeExplainEntry } from "./explain-schema.js";
 import { createValueNode } from "./serialization.js";
 import {
-  assertAtomicPreprocessor,
   assertNotAtomShapedClassName,
   type AtomicRecipeNode,
   BaseProcessor,
@@ -295,7 +294,6 @@ export default class SlotRecipeProcessor extends BaseProcessor {
     config: ReturnType<typeof expectSlotRecipeConfig>,
     localRuntimeDefinition: ReturnType<typeof createSlotRecipeRuntimeDefinition>,
   ): void {
-    assertAtomicPreprocessor(this.options);
     const isDefined = (style: unknown) => style !== undefined && style !== null && style !== false;
     const baseStyles =
       config.base === undefined ? {} : expectSlotStyleMap(config.base, config.slots, "base");

@@ -2,7 +2,6 @@ import type { TailProcessorParams, ValueCache } from "@wyw-in-js/processor-utils
 import type { ExpressionValue } from "@wyw-in-js/shared";
 
 import {
-  assertAtomicPreprocessor,
   assertNotAtomShapedClassName,
   BaseProcessor,
   checkAtomicStyleOrder,
@@ -108,7 +107,6 @@ export default class CssProcessor extends BaseProcessor {
   }
 
   private buildAtomic(resolvedParts: readonly unknown[], composeRefs: readonly string[]): void {
-    assertAtomicPreprocessor(this.options);
     const part = createAtomicStylePart({
       className: this.className,
       context: this.context,

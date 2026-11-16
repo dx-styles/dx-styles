@@ -202,10 +202,13 @@ into one of the forms above, or set the property under one condition.
 **Vendor prefixes.** Atoms go through the same stylis prefixer, one atom at a time. The check
 compares the properties each atom emits after prefixing, so `-webkit-user-select` next to
 `userSelect` (which also emits `-webkit-user-select`) is a pair with no order rule; a vendor
-property also counts as the property it prefixes. Stylis prefixes `grid-row-start` and
-`grid-row-end` (and the `grid-column` pair) by each other when they share a rule, which an atom
-alone cannot do, so that pair fails the build: set them with their shorthand,
-`gridRow: "2 / 4"`.
+property also counts as the property it prefixes, except the `-ms-grid-*` properties of IE 10
+and 11, which alias no standard property. Stylis prefixes `grid-row-start` and `grid-row-end`
+(and the `grid-column` pair) by each other when they share a rule, which an atom alone cannot do.
+Such a pair builds, but with the prefixer on, its `-ms-grid-row-span` (or `-ms-grid-column-span`)
+differs from the semantic model: `gridRowStart: 2, gridRowEnd: 4` gives IE a span of 4, not 2.
+The build does not report it. If you support IE, set the pair with its shorthand,
+`gridRow: "2 / 4"`; with `prefixer: false` both models emit the same declarations.
 
 **A selector that does not select the styled element.** An atom styles only the element of its
 style. `&` inside `:is()` or `:where()` with one selector still names that element, so
@@ -222,9 +225,10 @@ build in the semantic model.
 two properties or conditions get one code, in the same build process, the build fails and names
 both. Change one of the declarations.
 
-**`preprocessor`.** The atomic model checks the order against the layout that stylis gives, so
-WyW's `preprocessor` option must stay unset or `"stylis"`. `"none"` or a function fails the
-build.
+**`preprocessor`.** The order check compares atoms by the layout that stylis gives, and the
+atomic model is tested only with WyW's stylis preprocessor (the `preprocessor` option unset or
+`"stylis"`). WyW does not pass that option to processors, so with `"none"` or a function the
+build neither fails nor checks what that preprocessor makes of the atoms.
 
 **`classNameSlug`.** In either model, a class name that WyW's `classNameSlug` option turns into
 the shape of an atom (`dx-<key>_<value>`) fails the build, because `cx` would merge it with atoms.
