@@ -212,15 +212,35 @@ function readSimpleSpecificity(simple: SimpleSelector, ampSpecificity: Specifici
     case "attribute":
       return [0, 1, 0];
     case "type":
-    case "pseudo-element":
       return [0, 0, 1];
     case "universal":
       return [0, 0, 0];
+    case "pseudo-element":
     case "pseudo-class":
       break;
   }
 
   const argument = simple.argument ?? [];
+
+  // ::slotted(), :host() and :host-context() add the specificity of their
+  // argument to their own (CSS Shadow, 3.2.3 and 3.2.4).
+  const own: Specificity =
+    simple.kind === "pseudo-element" ? [0, 0, 1] : [0, 1, 0];
+  const addsArgument =
+    simple.kind === "pseudo-element"
+      ? simple.name === "slotted"
+      : simple.name === "host" || simple.name === "host-context";
+
+  if (addsArgument && argument.length > 0) {
+    return addSpecificity(
+      own,
+      maxSpecificity(splitSelectorList(argument), ampSpecificity),
+    );
+  }
+
+  if (simple.kind === "pseudo-element") {
+    return own;
+  }
 
   if (simple.name === "where") {
     return [0, 0, 0];

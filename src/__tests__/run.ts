@@ -5672,6 +5672,28 @@ async function testAtomicOrderErrors() {
     "atomic-errors/fallback-important.ts",
     /"width: 10px !important" under "&:active".*"width: 20px !important" under "&:hover".*The semantic model applies "&:hover".*pseudo-class rank decides.*it would apply "&:active"/su,
   );
+  // :host() and :host-context() weigh a pseudo-class plus their argument (CSS
+  // Shadow, 3.2.3): under a host with the classes a and b the semantic model
+  // applies the context rule while hovered, the atomic model :hover.
+  await assertAtomicBuildFails(
+    `export const hosted = css({ ":host(.a.b) &": { color: "red" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/host-argument.ts",
+    /css\(\) "hosted" sets "color: red" under ":host\(\.a\.b\) &".*"color: blue" under "&:hover".*The semantic model applies ":host\(\.a\.b\) &".*it would apply "&:hover"/su,
+  );
+  await assertAtomicBuildFails(
+    `export const themed = css({ ":host-context(.a.b) &": { color: "red" }, "&:hover": { color: "blue" } });`,
+    "atomic-errors/host-context-argument.ts",
+    /The semantic model applies ":host-context\(\.a\.b\) &".*it would apply "&:hover"/su,
+  );
+  // ::slotted() weighs a pseudo-element plus its argument (CSS Shadow, 3.2.4).
+  await assertAtomicBuildFails(
+    `export const slot = css({
+      "&::slotted(.a.b)": { color: "red" },
+      "&:hover::slotted(*)": { color: "blue" },
+    });`,
+    "atomic-errors/slotted-argument.ts",
+    /The semantic model applies "&::slotted\(\.a\.b\)".*it would apply "&:hover::slotted\(\*\)"/su,
+  );
   await assertAtomicBuildFails(
     `export const layered = css({ "@layer base": { color: "red" } });`,
     "atomic-errors/layer.ts",
@@ -5841,6 +5863,15 @@ async function testAtomicAllowedOrders() {
       export const gapThenGrid = css({ rowGap: 8, grid: "auto / 1fr" });
       export const gridThenGap = css({ grid: "auto / 1fr", rowGap: 8 });
       export const markers = css({ marker: "none", markerStart: "url(#arrow)" });
+      export const hostWins = css({
+        ":host(.a.b.c.d.e.f.g.h) &": { color: "red" },
+        "&:hover": { color: "blue" },
+      });
+      export const hostLoses = css({ ":host &": { color: "red" }, "&:hover": { color: "blue" } });
+      export const slottedLoses = css({
+        "&::slotted(.a)": { color: "red" },
+        "&:hover::slotted(*)": { color: "blue" },
+      });
     `,
     "atomic-allowed.ts",
     { output: "atomic" },
