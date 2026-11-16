@@ -13,11 +13,14 @@
  * field of the shorthands in mdn-data 2.37.2 (css/properties.json), the
  * shorthands mdn-data marks "asSpecified" or leaves out, from their
  * specifications (`marker` of SVG 2, `text-box` and `vertical-align` of CSS
- * Inline 3, `line-clamp` of CSS Overflow 4, `text-align` of CSS Text 4), and
- * follows the specifications where mdn-data lags: `grid` does not reset the
- * gaps (CSS Grid 2, §7.8). It also links the flow-relative box shorthands
- * (`padding-inline`, ...) to the physical box shorthand of their family and the
- * side shorthands (`border-top`, ...) to `border`. A shorthand also lists the properties it resets but cannot set
+ * Inline 3, `line-clamp` of CSS Overflow 4, `text-align` of CSS Text 4, and
+ * the corner, side radius, `border-clip` and `box-shadow` shorthands of CSS
+ * Borders 4), and follows the specifications where mdn-data lags: `grid` does
+ * not reset the gaps (CSS Grid 2, §7.8). It also links the flow-relative box
+ * shorthands (`padding-inline`, ...) to the physical box shorthand of their
+ * family, the side shorthands (`border-top`, ...) to `border`, and the side
+ * shorthands of the corners (`border-top-radius`, `corner-block-start-shape`)
+ * to `border-radius` and `corner-shape`. A shorthand also lists the properties it resets but cannot set
  * (its reset-only sub-properties): `border` resets `border-image` (CSS
  * Cascade 5, §3), `font` resets `font-kerning` and the other "reset
  * implicitly" properties (CSS Fonts 4, §2.7), `mask` resets `mask-border`, and
@@ -144,6 +147,50 @@ export const PROPERTY_CODE_TABLE: readonly string[] = [
   "zoom",
 ];
 
+type BoxSide =
+  | "block-end"
+  | "block-start"
+  | "bottom"
+  | "inline-end"
+  | "inline-start"
+  | "left"
+  | "right"
+  | "top";
+
+// The two corners of each side (CSS Borders 4, §3.6.1). In a flow-relative
+// corner the first start/end is on the block axis, the second on the inline axis.
+const SIDE_CORNERS: Readonly<Record<BoxSide, readonly [string, string]>> = {
+  "block-end": ["end-start", "end-end"],
+  "block-start": ["start-start", "start-end"],
+  bottom: ["bottom-left", "bottom-right"],
+  "inline-end": ["start-end", "end-end"],
+  "inline-start": ["start-start", "end-start"],
+  left: ["top-left", "bottom-left"],
+  right: ["top-right", "bottom-right"],
+  top: ["top-left", "top-right"],
+};
+const SIDES = Object.keys(SIDE_CORNERS) as BoxSide[];
+const CORNERS = [...new Set(Object.values(SIDE_CORNERS).flat())];
+
+/**
+ * The shorthands of the radius and the shape of one corner or of the two corners
+ * of one side (`corner-top-left`, `corner-block-start`; CSS Borders 4, §3.9), and
+ * the side shorthands of the radius and of the shape (§3.6.1, §3.8.1).
+ */
+function cornerShorthands(): Record<string, readonly string[]> {
+  const entries: [string, readonly string[]][] = [
+    ...[...CORNERS, ...SIDES].map((place): [string, readonly string[]] => [
+      `corner-${place}`,
+      [`corner-${place}-shape`, `border-${place}-radius`],
+    ]),
+    ...SIDES.flatMap((side): [string, readonly string[]][] => [
+      [`corner-${side}-shape`, SIDE_CORNERS[side].map((corner) => `corner-${corner}-shape`)],
+      [`border-${side}-radius`, SIDE_CORNERS[side].map((corner) => `border-${corner}-radius`)],
+    ]),
+  ];
+  return Object.fromEntries(entries);
+}
+
 // prettier-ignore
 export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>> = {
   "animation": [
@@ -162,6 +209,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
     "border-left", "border-image",
   ],
   "border-block": ["border-block-width", "border-block-style", "border-block-color"],
+  "border-block-clip": ["border-block-start-clip", "border-block-end-clip"],
   "border-block-color": ["border-block-start-color", "border-block-end-color"],
   "border-block-end": [
     "border-block-end-width", "border-block-end-style", "border-block-end-color",
@@ -172,6 +220,10 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "border-block-style": ["border-block-start-style", "border-block-end-style"],
   "border-block-width": ["border-block-start-width", "border-block-end-width"],
   "border-bottom": ["border-bottom-width", "border-bottom-style", "border-bottom-color"],
+  "border-clip": [
+    "border-top-clip", "border-right-clip", "border-bottom-clip", "border-left-clip",
+    "border-block-clip", "border-inline-clip",
+  ],
   "border-color": [
     "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
   ],
@@ -180,6 +232,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
     "border-image-repeat",
   ],
   "border-inline": ["border-inline-width", "border-inline-style", "border-inline-color"],
+  "border-inline-clip": ["border-inline-start-clip", "border-inline-end-clip"],
   "border-inline-color": ["border-inline-start-color", "border-inline-end-color"],
   "border-inline-end": [
     "border-inline-end-width", "border-inline-end-style", "border-inline-end-color",
@@ -192,7 +245,7 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "border-left": ["border-left-width", "border-left-style", "border-left-color"],
   "border-radius": [
     "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius",
-    "border-bottom-left-radius",
+    "border-bottom-left-radius", ...SIDES.map((side) => `border-${side}-radius`),
   ],
   "border-right": ["border-right-width", "border-right-style", "border-right-color"],
   "border-style": [
@@ -202,23 +255,21 @@ export const SHORTHAND_SUBPROPERTIES: Readonly<Record<string, readonly string[]>
   "border-width": [
     "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
   ],
+  "box-shadow": [
+    "box-shadow-offset", "box-shadow-blur", "box-shadow-spread", "box-shadow-color",
+    "box-shadow-position",
+  ],
   "caret": ["caret-color", "caret-animation", "caret-shape"],
   "column-rule": ["column-rule-width", "column-rule-style", "column-rule-color"],
   "columns": ["column-width", "column-count", "column-height"],
   "contain-intrinsic-size": ["contain-intrinsic-width", "contain-intrinsic-height"],
   "container": ["container-name", "container-type"],
-  "corner-block-end-shape": ["corner-end-start-shape", "corner-end-end-shape"],
-  "corner-block-start-shape": ["corner-start-start-shape", "corner-start-end-shape"],
-  "corner-bottom-shape": ["corner-bottom-left-shape", "corner-bottom-right-shape"],
-  "corner-inline-end-shape": ["corner-start-end-shape", "corner-end-end-shape"],
-  "corner-inline-start-shape": ["corner-start-start-shape", "corner-start-end-shape"],
-  "corner-left-shape": ["corner-top-left-shape", "corner-bottom-left-shape"],
-  "corner-right-shape": ["corner-top-right-shape", "corner-bottom-right-shape"],
+  "corner": [...CORNERS, ...SIDES].map((place) => `corner-${place}`),
+  ...cornerShorthands(),
   "corner-shape": [
-    "corner-top-left-shape", "corner-top-right-shape", "corner-bottom-left-shape",
-    "corner-bottom-right-shape",
+    "corner-top-left-shape", "corner-top-right-shape", "corner-bottom-right-shape",
+    "corner-bottom-left-shape", ...SIDES.map((side) => `corner-${side}-shape`),
   ],
-  "corner-top-shape": ["corner-top-left-shape", "corner-top-right-shape"],
   "flex": ["flex-grow", "flex-shrink", "flex-basis"],
   "flex-flow": ["flex-direction", "flex-wrap"],
   "font": [
@@ -443,18 +494,19 @@ function isHorizontal(mode: WritingMode): boolean {
 
 /**
  * The physical property that a flow-relative longhand sets in one writing
- * mode (CSS Logical Properties and Values 1); any other longhand is itself.
+ * mode (CSS Logical Properties and Values 1, CSS Borders 4); any other
+ * longhand is itself.
  */
 function toPhysical(longhand: string, mode: WritingMode): string {
-  const corner = /^border-(start|end)-(start|end)-radius$/u.exec(longhand);
+  const corner = /^(border|corner)-(start|end)-(start|end)(-radius|-shape)?$/u.exec(longhand);
   if (corner !== null) {
     const sides = [
-      mode.block[corner[1] as "end" | "start"],
-      mode.inline[corner[2] as "end" | "start"],
+      mode.block[corner[2] as "end" | "start"],
+      mode.inline[corner[3] as "end" | "start"],
     ];
     const vertical = sides.find((side) => side === "top" || side === "bottom");
     const horizontal = sides.find((side) => side === "left" || side === "right");
-    return `border-${vertical}-${horizontal}-radius`;
+    return `${corner[1]}-${vertical}-${horizontal}${corner[4] ?? ""}`;
   }
 
   const size = /^(min-|max-|contain-intrinsic-)?(block|inline)-size$/u.exec(longhand);
@@ -537,25 +589,32 @@ const initialWritingMode = writingModes[0];
 
 let flowRelativeCounterparts: Map<string, string> | undefined;
 
+// The properties of the code table and of the shorthand table.
+const knownProperties = new Set([
+  ...PROPERTY_CODE_TABLE,
+  ...Object.entries(SHORTHAND_SUBPROPERTIES).flat(2),
+]);
+
 /**
- * The flow-relative property of the code table that sets this physical
- * property in the initial writing mode (`margin-block-start` for `margin-top`,
- * `block-size` for `height`), or null when there is none.
+ * The flow-relative property that sets this physical property in the initial
+ * writing mode (`margin-block-start` for `margin-top`, `block-size` for
+ * `height`), or null when there is none.
  */
 export function readFlowRelativeCounterpart(property: string): null | string {
   flowRelativeCounterparts ??= new Map(
-    PROPERTY_CODE_TABLE.filter(isFlowRelative)
+    [...knownProperties]
+      .filter(isFlowRelative)
       .map((flowRelative) => [toPhysical(flowRelative, initialWritingMode), flowRelative] as const)
-      .filter(([physical]) => propertyCodes.has(physical) && !isFlowRelative(physical)),
+      .filter(([physical]) => knownProperties.has(physical) && !isFlowRelative(physical)),
   );
 
   return flowRelativeCounterparts.get(property) ?? null;
 }
 
 /**
- * The physical property of the code table that a flow-relative property sets in
- * the initial writing mode (`margin-left` for `margin-inline-start`), or null
- * when it sets more than one (`margin-inline`).
+ * The physical property that a flow-relative property sets in the initial
+ * writing mode (`margin-left` for `margin-inline-start`), or null when it sets
+ * more than one (`margin-inline`).
  */
 export function readPhysicalCounterpart(property: string): null | string {
   if (!isFlowRelative(property)) {
@@ -563,5 +622,5 @@ export function readPhysicalCounterpart(property: string): null | string {
   }
 
   const physical = toPhysical(property, initialWritingMode);
-  return physical !== property && propertyCodes.has(physical) ? physical : null;
+  return physical !== property && knownProperties.has(physical) ? physical : null;
 }

@@ -5796,6 +5796,56 @@ async function testAtomicPhysicalAndFlowRelativeHint() {
   ].forEach((declaration) => assert.ok(cssText.includes(declaration), cssText));
 }
 
+// CSS Borders 4: the first start/end of a flow-relative corner is on the block
+// axis and the second on the inline axis (§3.5, §3.7), so corner-start-start-shape
+// is the top-left corner in horizontal-tb ltr and another one elsewhere.
+async function testAtomicFlowRelativeCornersMeetPhysicalOnes() {
+  await assertAtomicBuildFails(
+    `export const card = css({ borderRadius: 16, cornerStartStartShape: "bevel", cornerShape: "round" });`,
+    "atomic-errors/logical-corner-shape.ts",
+    /"corner-start-start-shape: bevel".*"corner-shape: round".*a longhand wins over its shorthand/su,
+  );
+  await assertAtomicBuildFails(
+    `export const card = css({ cornerTopLeftShape: "round", cornerStartStartShape: "bevel" });`,
+    "atomic-errors/physical-corner-shape.ts",
+    /"corner-top-left-shape" is physical and "corner-start-start-shape" flow-relative.*"corner-start-start-shape" instead of "corner-top-left-shape", or "corner-top-left-shape" instead of "corner-start-start-shape"/su,
+  );
+  // The side radius shorthands (§3.6.1) set two corners each.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopLeftRadius: "4px", borderBlockStartRadius: "8px" });`,
+    "atomic-errors/logical-side-radius.ts",
+    /"border-top-left-radius: 4px".*"border-block-start-radius: 8px".*a longhand wins over its shorthand/su,
+  );
+  // The corner shorthands (§3.9) set the shape and the radius of their corners.
+  await assertAtomicBuildFails(
+    `export const card = css({ borderStartStartRadius: "8px", cornerBlockStart: "4px bevel" });`,
+    "atomic-errors/logical-corner.ts",
+    /"border-start-start-radius: 8px".*"corner-block-start: 4px bevel".*a longhand wins over its shorthand/su,
+  );
+  // The border clip of a flow-relative side (§5.2).
+  await assertAtomicBuildFails(
+    `export const card = css({ borderTopClip: "none", borderBlockClip: "none" });`,
+    "atomic-errors/logical-border-clip.ts",
+    /"border-top-clip: none".*"border-block-clip: none"/su,
+  );
+
+  const result = await runWywTransform(
+    `
+      import { css } from "dx-styles";
+
+      export const logical = css({ cornerShape: "round", cornerStartStartShape: "bevel" });
+      export const physical = css({ cornerShape: "round", cornerTopLeftShape: "bevel" });
+      export const sides = css({ borderRadius: "16px", borderBlockStartRadius: "4px" });
+    `,
+    "atomic-logical-corners.ts",
+    { output: "atomic" },
+  );
+  const cssText = result.cssText ?? "";
+  ["corner-start-start-shape:bevel;", "corner-top-left-shape:bevel;", "border-block-start-radius:4px;"].forEach(
+    (declaration) => assert.ok(cssText.includes(declaration), cssText),
+  );
+}
+
 async function testAtomicAllowedOrders() {
   const result = await runWywTransform(
     `
@@ -6054,9 +6104,32 @@ const SHORTHAND_FAMILIES = [
   "columns: column-width column-count column-height",
   "contain-intrinsic-size: contain-intrinsic-width contain-intrinsic-height contain-intrinsic-block-size contain-intrinsic-inline-size",
   "container: container-name container-type",
-  "corner-shape: corner-top-shape corner-bottom-shape",
-  "corner-top-shape: corner-top-left-shape corner-top-right-shape",
-  "corner-bottom-shape: corner-bottom-left-shape corner-bottom-right-shape",
+  "corner-shape: corner-top-shape corner-bottom-shape corner-start-start-shape corner-start-end-shape corner-end-start-shape corner-end-end-shape",
+  // CSS Borders 4: the side shorthands of the radius and the shape (§3.6.1,
+  // §3.8.1), the corner shorthands (§3.9), the border clip (§5.2) and the
+  // box-shadow longhands (§6).
+  ...Object.entries({
+    top: "top-left top-right",
+    right: "top-right bottom-right",
+    bottom: "bottom-left bottom-right",
+    left: "top-left bottom-left",
+    "block-start": "start-start start-end",
+    "block-end": "end-start end-end",
+    "inline-start": "start-start end-start",
+    "inline-end": "start-end end-end",
+  }).flatMap(([side, corners]) => [
+    `border-${side}-radius: ${corners.replace(/\S+/gu, "border-$&-radius")}`,
+    `corner-${side}-shape: ${corners.replace(/\S+/gu, "corner-$&-shape")}`,
+    `corner-${side}: corner-${side}-shape border-${side}-radius`,
+  ]),
+  ..."top-left top-right bottom-right bottom-left start-start start-end end-start end-end"
+    .split(" ")
+    .map((corner) => `corner-${corner}: corner-${corner}-shape border-${corner}-radius`),
+  "corner: corner-shape border-radius",
+  "border-clip: border-top-clip border-right-clip border-bottom-clip border-left-clip border-block-clip border-inline-clip",
+  "border-block-clip: border-block-start-clip border-block-end-clip",
+  "border-inline-clip: border-inline-start-clip border-inline-end-clip",
+  "box-shadow: box-shadow-offset box-shadow-blur box-shadow-spread box-shadow-color box-shadow-position",
   "flex: flex-grow flex-shrink flex-basis",
   "flex-flow: flex-direction flex-wrap",
   "font: font-style font-variant font-weight font-width font-size line-height font-family font-feature-settings font-kerning font-language-override font-optical-sizing font-size-adjust font-variation-settings",
@@ -6692,6 +6765,7 @@ async function main() {
   await testAtomicOrderRules();
   await testAtomicOrderErrors();
   await testAtomicPhysicalAndFlowRelativeHint();
+  await testAtomicFlowRelativeCornersMeetPhysicalOnes();
   await testAtomicAllowedOrders();
   await testAtomicSelectorsReadClassesAsTokens();
   await testAtomicFallbackArrayIsOneAtom();
